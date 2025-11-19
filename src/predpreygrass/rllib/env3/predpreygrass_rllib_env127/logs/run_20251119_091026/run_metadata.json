@@ -143,6 +143,6 @@
     "ray_results_dir": "/home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_091026/ray_results"
   },
   "tensorboard_command": "tensorboard --logdir /home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_091026/ray_results",
-  "status": "initialised",
+  "status": "interrupted",
   "best_checkpoint": null
 }

@@ -22,8 +22,8 @@ config_env_base = {
     "survival_bonus_prey": 0.5,
     "allow_empty_predator_population": False,
     # === Population settings ===
-    "n_initial_active_predator": 1,
-    "n_initial_active_prey": 5,
+    "n_initial_active_predator": 5,
+    "n_initial_active_prey": 20,
     "n_possible_predators": 20000,
     "n_possible_prey": 20000,
     "n_populations": 1,
@@ -32,7 +32,7 @@ config_env_base = {
         "prey_4": "Random",
     },
     # === Grass system ===
-    "initial_num_grass": 50,
+    "initial_num_grass": 100,
     "initial_energy_grass": 10,
     "energy_gain_per_step_grass": 0.5,
     "grass_energy_decay_constant": 10.0,
@@ -79,7 +79,7 @@ config_env_base = {
     "turn_penalty_factor_predator": 0.00,
     "turn_penalty_factor_prey": 0.01,
     # === Reproduction system ===
-    "enable_paired_reproduction": True,
+    "enable_paired_reproduction": False,
     "reproduction_mode": "ratio",
     "reproduction_energy_ratio": 0.4,
     "reproduction_energy_ratio_predator": 0.25,
@@ -104,7 +104,7 @@ config_env_base = {
     "soft_speed_limit_prey": None,
     "drag_coefficient": 0.0,
     "use_direct_velocity_control": True,
-    "direct_velocity_speed_predator": 5.0,
+    "direct_velocity_speed_predator": 150.0,
     "direct_velocity_speed_prey": 220.0,
     "direct_velocity_accel_scale_predator": 60.0,
     "direct_velocity_accel_scale_prey": 40.0,

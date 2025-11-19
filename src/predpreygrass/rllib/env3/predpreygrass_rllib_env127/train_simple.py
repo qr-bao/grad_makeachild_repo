@@ -10,15 +10,21 @@
 import argparse
 import json
 import logging
+import os
 import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
 
+os.environ.setdefault("RLLIB_ENABLE_NEW_API_STACK", "0")
+
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.examples._old_api_stack.policy.random_policy import RandomPolicy
 from ray.tune import CheckpointConfig, RunConfig, Tuner
 from ray.tune.registry import register_env
+from ray.tune.stopper import CombinedStopper, MaximumIterationStopper, Stopper
+from ray.rllib.policy.sample_batch import SampleBatch
 
 from predpreygrass.rllib.env3.predpreygrass_rllib_env127.predpreygrass_rllib_env import (
     PredPreyGrass,
@@ -29,6 +35,58 @@ from predpreygrass.rllib.env3.predpreygrass_rllib_env127.config.config_env_train
 from predpreygrass.rllib.env3.predpreygrass_rllib_env127.metrics_callbacks import (
     EpisodeMetricsCallbacks,
 )
+
+
+def _patch_sample_batch():
+    original_fn = SampleBatch.is_single_trajectory
+
+    def _is_single_trajectory(self):
+        terminateds = list(self[SampleBatch.TERMINATEDS])
+        truncations = (
+            list(self[SampleBatch.TRUNCATEDS])
+            if SampleBatch.TRUNCATEDS in self
+            else [False] * len(terminateds)
+        )
+        if not terminateds:
+            return True
+        if truncations and truncations[-1] and not terminateds[-1]:
+            terminateds = terminateds[:-1]
+            truncations = truncations[:-1]
+        if not terminateds:
+            return True
+        return not any(terminateds[:-1]) and not any(truncations[:-1])
+
+    if getattr(SampleBatch.is_single_trajectory, "__patched", False) is False:
+        _is_single_trajectory.__patched = True
+        SampleBatch.is_single_trajectory = _is_single_trajectory
+
+
+_patch_sample_batch()
+
+class RewardPlateauStopper(Stopper):
+    """Stop training if monitored metric fails to improve."""
+
+    def __init__(self, metric: str, patience: int):
+        self.metric = metric
+        self.patience = patience
+        self._best = None
+        self._bad_iters = 0
+
+    def __call__(self, trial_id, result):
+        if self.patience <= 0:
+            return False
+        value = result.get(self.metric)
+        if value is None:
+            return False
+        if self._best is None or value > self._best:
+            self._best = value
+            self._bad_iters = 0
+        else:
+            self._bad_iters += 1
+        return self._bad_iters >= self.patience
+
+    def stop_all(self):
+        return False
 
 
 def create_env_config():
@@ -143,6 +201,12 @@ def main():
         help="Disable environment-level debug logging.",
     )
     parser.add_argument(
+        "--max-env-steps",
+        type=int,
+        default=800,
+        help="Cap environment max_steps to avoid runaway episodes (<=0 disables the cap).",
+    )
+    parser.add_argument(
         "--predator-survival-bonus",
         type=float,
         default=None,
@@ -157,7 +221,7 @@ def main():
     parser.add_argument(
         "--env-config-file",
         type=str,
-        default=None,
+        default="env_config_enable_repro.json",
         help="Optional JSON file with env config overrides (merged onto config_env_train).",
     )
     parser.add_argument(
@@ -181,14 +245,14 @@ def main():
     parser.add_argument(
         "--rollout-fragment-length",
         type=str,
-        default="400",
+        default="auto",
         help="rollout_fragment_length passed to PPOConfig.env_runners(). "
         "Supports positive integers or 'auto'. Default=400 (env steps across agents).",
     )
     parser.add_argument(
         "--train-batch-size",
         type=int,
-        default=400,
+        default=396,
         help="train_batch_size_per_learner override (default: 2048).",
     )
     parser.add_argument(
@@ -196,11 +260,51 @@ def main():
         action="store_true",
         help="Shortcut to force script/env logging to DEBUG.",
     )
+    parser.add_argument(
+        "--early-stop-patience",
+        type=int,
+        default=50,
+        help="Stop if reward fails to improve for N iterations (0 disables early stop).",
+    )
+    parser.add_argument(
+        "--early-stop-metric",
+        type=str,
+        default="env_runners/episode_reward_mean",
+        help="Metric key to monitor for early stopping.",
+    )
+    parser.add_argument(
+        "--lr-schedule",
+        type=str,
+        default="[[0, 0.0003], [500, 0.0001]]",
+        help="Optional JSON list for lr_schedule, e.g. '[[0,3e-4],[500,1e-4]]'.",
+    )
+    parser.add_argument(
+        "--predator-strategy",
+        type=str,
+        choices=["ppo", "random"],
+        default="ppo",
+        help="Learning strategy for predator policy.",
+    )
+    parser.add_argument(
+        "--prey-strategy",
+        type=str,
+        choices=["ppo", "random"],
+        default="ppo",
+        help="Learning strategy for prey policy.",
+    )
     
     args = parser.parse_args()
     if args.debug_logging:
         args.log_level = "DEBUG"
         args.env_debug_level = "DEBUG"
+    lr_schedule = None
+    if args.lr_schedule:
+        try:
+            lr_schedule = json.loads(args.lr_schedule)
+        except json.JSONDecodeError as exc:
+            raise ValueError("--lr-schedule must be valid JSON list, e.g. '[[0, 3e-4],[500,1e-4]]'") from exc
+        if not isinstance(lr_schedule, list):
+            raise ValueError("--lr-schedule must decode to a list of [t, lr] pairs.")
 
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_log_dir = Path(args.log_dir)
@@ -247,6 +351,21 @@ def main():
         env_log_dir.resolve(),
     )
 
+    if args.max_env_steps and args.max_env_steps > 0:
+        current_max_steps = base_env_config.get("max_steps")
+        capped_max_steps = (
+            min(current_max_steps, args.max_env_steps)
+            if current_max_steps is not None
+            else args.max_env_steps
+        )
+        if current_max_steps != capped_max_steps:
+            logger.info(
+                "Capping env max_steps from %s to %s to keep episodes bounded.",
+                current_max_steps,
+                capped_max_steps,
+            )
+        base_env_config["max_steps"] = capped_max_steps
+
     run_metadata = {
         "run_id": run_timestamp,
         "script": str(Path(__file__).resolve()),
@@ -283,7 +402,19 @@ def main():
     # 初始化Ray
     ray.shutdown()
     logger.debug("Ray shutdown called before initialisation.")
-    ray.init(log_to_driver=True, ignore_reinit_error=True)
+    runtime_env_vars = {
+        "RLLIB_ENABLE_NEW_API_STACK": os.environ.get(
+            "RLLIB_ENABLE_NEW_API_STACK", "0"
+        )
+    }
+    debug_dump_dir = os.environ.get("PREDPREY_BAD_BATCH_DIR")
+    if debug_dump_dir:
+        runtime_env_vars["PREDPREY_BAD_BATCH_DIR"] = debug_dump_dir
+    ray.init(
+        log_to_driver=True,
+        ignore_reinit_error=True,
+        runtime_env={"env_vars": runtime_env_vars},
+    )
     logger.info("Ray initialised.")
     try:
         cluster_resources = ray.cluster_resources()
@@ -352,6 +483,57 @@ def main():
     if args.train_batch_size <= 0:
         raise ValueError("--train-batch-size must be positive.")
 
+    training_kwargs = dict(
+        train_batch_size=args.train_batch_size,
+        minibatch_size=256,
+        num_epochs=30,
+        gamma=0.99,
+        lr=0.0003,
+        entropy_coeff=0.01,
+        vf_loss_coeff=1.0,
+        clip_param=0.3,
+        kl_coeff=0.2,
+        kl_target=0.01,
+        model=model_config,
+    )
+    if lr_schedule:
+        training_kwargs["lr_schedule"] = lr_schedule
+    predator_policy_spec = (
+        (
+            None,
+            obs_space_pred,
+            act_space_pred,
+            {"model": model_config.copy()},
+        )
+        if args.predator_strategy == "ppo"
+        else (
+            RandomPolicy,
+            obs_space_pred,
+            act_space_pred,
+            {},
+        )
+    )
+    prey_policy_spec = (
+        (
+            None,
+            obs_space_prey,
+            act_space_prey,
+            {"model": model_config.copy()},
+        )
+        if args.prey_strategy == "ppo"
+        else (
+            RandomPolicy,
+            obs_space_prey,
+            act_space_prey,
+            {},
+        )
+    )
+    policies_to_train = []
+    if args.predator_strategy == "ppo":
+        policies_to_train.append("predator_policy")
+    if args.prey_strategy == "ppo":
+        policies_to_train.append("prey_policy")
+
     ppo_config = (
         PPOConfig()
         .api_stack(
@@ -362,34 +544,13 @@ def main():
         .framework("torch")
         .multi_agent(
             policies={
-                "predator_policy": (
-                    None,
-                    obs_space_pred,
-                    act_space_pred,
-                    {"model": model_config.copy()},
-                ),
-                "prey_policy": (
-                    None,
-                    obs_space_prey,
-                    act_space_prey,
-                    {"model": model_config.copy()},
-                ),
+                "predator_policy": predator_policy_spec,
+                "prey_policy": prey_policy_spec,
             },
             policy_mapping_fn=policy_mapping_fn,
+            policies_to_train=policies_to_train or None,
         )
-        .training(
-            train_batch_size=args.train_batch_size,
-            minibatch_size=256,
-            num_epochs=30,
-            gamma=0.99,
-            lr=0.0003,
-            entropy_coeff=0.01,
-            vf_loss_coeff=1.0,
-            clip_param=0.3,
-            kl_coeff=0.2,
-            kl_target=0.01,
-            model=model_config,
-        )
+        .training(**training_kwargs)
         .env_runners(
             num_env_runners=args.num_workers,
             num_envs_per_env_runner=args.num_envs_per_worker,
@@ -444,13 +605,20 @@ def main():
     logger.info("Environment logs directory: %s", env_log_dir.resolve())
     print(f"\nStarting training for {args.num_iterations} iterations...")
     
+    stopper = MaximumIterationStopper(args.num_iterations)
+    if args.early_stop_patience > 0:
+        stopper = CombinedStopper(
+            stopper,
+            RewardPlateauStopper(args.early_stop_metric, args.early_stop_patience),
+        )
+
     tuner = Tuner(
         ppo_config.algo_class,
         param_space=ppo_config,
         run_config=RunConfig(
             storage_path=str(ray_results_dir.resolve()),
             name="PPO_PredPreyGrass_continuous_simple",
-            stop={"training_iteration": args.num_iterations},
+            stop=stopper,
             checkpoint_config=CheckpointConfig(
                 num_to_keep=5,
                 checkpoint_frequency=args.checkpoint_freq,

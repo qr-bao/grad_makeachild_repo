@@ -28,7 +28,9 @@ from predpreygrass.rllib.env3.predpreygrass_rllib_env127.visualizer import (
 from predpreygrass.rllib.env3.predpreygrass_rllib_env127.config.config_env_base import (
     config_env_base,
 )
-
+# from predpreygrass.rllib.env3.predpreygrass_rllib_env127.config.config_env_base_nopredator import (
+#     config_env_base,
+# )
 prey_test_config = config_env_base
 
 

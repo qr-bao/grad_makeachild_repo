@@ -411,7 +411,13 @@ class PredPreyGrass(MultiAgentEnv):
         )
         
         # === 7. Learning agents ===
-        self.use_monotonic_offspring_ids = config.get("use_monotonic_offspring_ids", True)
+        # Enforce monotonic offspring IDs so a logical agent id can only appear once per episode.
+        if config.get("use_monotonic_offspring_ids", True) is False:
+            logging.getLogger(__name__).warning(
+                "use_monotonic_offspring_ids was requested to be False but is forced to True "
+                "to avoid policy sample corruption."
+            )
+        self.use_monotonic_offspring_ids = True
         self.n_possible_predators = config.get("n_possible_predators", 50)
         self.n_possible_prey = config.get("n_possible_prey", 50)
         self.allow_empty_predator_population = bool(config.get("allow_empty_predator_population", False))
@@ -440,6 +446,7 @@ class PredPreyGrass(MultiAgentEnv):
             "prey": self.n_initial_active_prey,
         }
         self.retired_agents: set[str] = set()
+        self.used_ids_this_episode: Set[AgentID] = set()
         # === 新增：种群配置 ===
         self.n_populations = config.get("n_populations", 2)        
         # 接收外部传入的算法显示信息（仅用于GUI显示）
@@ -602,6 +609,7 @@ class PredPreyGrass(MultiAgentEnv):
         self.agents: List[AgentID] = [
             f"predator_{i}" for i in range(self.n_initial_active_predator)
         ] + [f"prey_{j}" for j in range(self.n_initial_active_prey)]
+        self.used_ids_this_episode = set(self.agents)
         
         self.grass_agents: List[AgentID] = [f"grass_{k}" for k in range(self.initial_num_grass)]
         self._grass_id_counter = count(start=len(self.grass_agents))
@@ -898,6 +906,7 @@ class PredPreyGrass(MultiAgentEnv):
         self.agents = [
             f"predator_{i}" for i in range(self.n_initial_active_predator)
         ] + [f"prey_{j}" for j in range(self.n_initial_active_prey)]
+        self.used_ids_this_episode = set(self.agents)
         
         # === 重置草实体ID列表，避免上轮追加的ID残留 ===
         self.grass_agents = [f"grass_{k}" for k in range(self.initial_num_grass)]
@@ -2735,6 +2744,7 @@ class PredPreyGrass(MultiAgentEnv):
             "grass_generation": self.grass_generation.copy() if hasattr(self, 'grass_generation') else {},
             "retired_agents": self.retired_agents.copy(),
             "next_free_idx": self.next_free_idx.copy(),
+            "used_ids_this_episode": list(self.used_ids_this_episode),
             "grass_home_positions": self.grass_home_positions.copy(),
             "inactive_grass": list(self.inactive_grass),
             "grass_respawn_timers": self.grass_respawn_timers.copy(),
@@ -2781,6 +2791,7 @@ class PredPreyGrass(MultiAgentEnv):
         self.agent_algorithm = snapshot["agent_algorithm"].copy()
         self.agent_wants_to_mate = snapshot["agent_wants_to_mate"].copy()
         self.population_counts = snapshot["population_counts"].copy()
+        self.used_ids_this_episode = set(snapshot.get("used_ids_this_episode", self.agents))
         # === 恢复草的物理对象 ===
         if self.enable_continuous_space and "grass_bodies" in snapshot:
             for grass_id, pos in snapshot["grass_bodies"].items():
@@ -2954,49 +2965,28 @@ class PredPreyGrass(MultiAgentEnv):
         
         reproduction_cfg = self.reproduction_settings.get(agent_type, self.reproduction_settings["prey"])
 
-        if self.use_monotonic_offspring_ids:
-            next_idx = self.next_free_idx.get(agent_type, 0)
-            max_idx = self.max_indices[agent_type]
+        next_idx = self.next_free_idx.get(agent_type, 0)
+        max_idx = self.max_indices[agent_type]
 
-            if next_idx >= max_idx:
-                self._log_warning(
-                    "OffspringSlotsExhausted",
-                    agent_type=agent_type,
-                    next_index=next_idx,
-                    max_index=max_idx,
-                )
-                return None
-
-            offspring = f"{agent_type}_{next_idx}"
-            self.next_free_idx[agent_type] = next_idx + 1
-        else:
-            # 查找可用的智能体 ID（过滤已退休的）
-            potential_offspring = [
-                agent
-                for agent in self.possible_agents
-                if agent.startswith(f"{agent_type}_")
-                and agent not in self.agents
-                and agent not in getattr(self, "retired_agents", set())
-            ]
-
-            if not potential_offspring:
-                if self.verbose_spawning:
-                    print(f"[REPRODUCE] No available {agent_type} slots")
-                return None
-
-            offspring = potential_offspring[0]
-
-        if offspring in getattr(self, "retired_agents", set()):
-            # 理论上不会发生（新 ID），但为安全起见直接拒绝
+        if next_idx >= max_idx:
             self._log_warning(
-                "OffspringReusePrevented",
-                offspring=offspring,
+                "OffspringSlotsExhausted",
                 agent_type=agent_type,
+                next_index=next_idx,
+                max_index=max_idx,
             )
             return None
-        if offspring in self.agents:
+
+        offspring = f"{agent_type}_{next_idx}"
+        self.next_free_idx[agent_type] = next_idx + 1
+
+        if (
+            offspring in self.used_ids_this_episode
+            or offspring in getattr(self, "retired_agents", set())
+            or offspring in self.agents
+        ):
             self._log_warning(
-                "OffspringIdAlreadyActive",
+                "OffspringIdReusePrevented",
                 offspring=offspring,
                 agent_type=agent_type,
             )
@@ -3078,6 +3068,7 @@ class PredPreyGrass(MultiAgentEnv):
                 return None
         
         # 添加到环境
+        self.used_ids_this_episode.add(offspring)
         self.agents.append(offspring)
         self.agent_positions[offspring] = offspring_pos
         self.agent_energies[offspring] = offspring_energy

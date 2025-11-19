@@ -1,11 +1,11 @@
 Run ID: 20251119_092610
-Status: initialised
+Status: completed
 Command: train_simple.py --num-iterations 1000 --num-workers 4 --num-envs-per-worker 1 --rollout-fragment-length 100 --train-batch-size 400 --checkpoint-freq 200 --log-level ERROR --env-debug-level ERROR --eval-interval 0
 Run Directory: /home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610
 Environment Logs: /home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/envs
 Ray/TensorBoard Logs: /home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/ray_results
 TensorBoard Command: tensorboard --logdir /home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/ray_results
-Best Checkpoint: N/A
+Best Checkpoint: Checkpoint(filesystem=local, path=/home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/ray_results/PPO_PredPreyGrass_continuous_simple/PPO_PredPreyGrass-continuous_5ad2c_00000_0_2025-11-19_09-26-13/checkpoint_000003)
 
 Environment Config:
   agent_radius = 8

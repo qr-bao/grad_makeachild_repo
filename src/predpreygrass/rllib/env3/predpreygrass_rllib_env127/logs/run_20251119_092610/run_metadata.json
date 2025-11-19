@@ -143,6 +143,7 @@
     "ray_results_dir": "/home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/ray_results"
   },
   "tensorboard_command": "tensorboard --logdir /home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/ray_results",
-  "status": "initialised",
-  "best_checkpoint": null
+  "status": "completed",
+  "best_checkpoint": "Checkpoint(filesystem=local, path=/home/qrbao/Documents/code_test_makeachild/predpreygrass/PredPreyGrass/src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/run_20251119_092610/ray_results/PPO_PredPreyGrass_continuous_simple/PPO_PredPreyGrass-continuous_5ad2c_00000_0_2025-11-19_09-26-13/checkpoint_000003)",
+  "best_result_log_dir": ""
 }
