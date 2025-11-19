@@ -406,16 +406,23 @@ def main():
     )
 
     if args.eval_interval > 0 and args.eval_episodes > 0:
+        eval_env_config = base_env_config.copy()
+        eval_env_config["max_steps"] = min(
+            int(base_env_config.get("max_steps", 2000)), 1000
+        )
+        eval_env_config["allow_empty_predator_population"] = True
         eval_config = {
             "explore": False,
-            "env_config": base_env_config,
+            "env_config": eval_env_config,
+            "enable_env_runner_and_connector_v2": False,
+            "enable_rl_module_and_learner": False,
         }
         ppo_config = ppo_config.evaluation(
             evaluation_interval=args.eval_interval,
             evaluation_duration=args.eval_episodes,
             evaluation_duration_unit="episodes",
             evaluation_num_workers=max(1, args.eval_num_workers),
-            evaluation_parallel_to_training=True,
+            evaluation_parallel_to_training=False,
             evaluation_config=eval_config,
         )
         logger.info(

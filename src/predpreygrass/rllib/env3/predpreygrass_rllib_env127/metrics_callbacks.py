@@ -106,8 +106,6 @@ class EpisodeMetricsCallbacks(DefaultCallbacks):
     """Callback that pushes env episode metrics into custom_metrics."""
 
     def on_episode_end(self, *, episode, **kwargs) -> None:
-        if not getattr(episode, "is_evaluation", False):
-            return
 
         metrics_payload: Optional[Dict[str, float]] = None
         try:
