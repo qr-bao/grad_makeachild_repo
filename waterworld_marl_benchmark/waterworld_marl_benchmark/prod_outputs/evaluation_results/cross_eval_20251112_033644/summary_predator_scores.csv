@@ -1,0 +1,5 @@
+pred_label,predator_score
+PPO,0.585
+SAC,0.5415
+TD3,0.7175
+RANDOM,0.5369999999999999

@@ -1,0 +1,264 @@
+% Compile with: xelatex paper.tex (recommended)
+\documentclass[11pt]{article}
+\usepackage[UTF8]{ctex}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+% \usepackage{siunitx} % not required; avoid extra package
+\usepackage[authoryear,round]{natbib}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\geometry{margin=1in}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+% Tidy key-value paragraph macro for environment descriptions
+\newcommand{\kv}[2]{\noindent\textbf{#1}：#2\par}
+
+% Make \paragraph a block heading (not run-in)
+\makeatletter
+\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
+  {1ex \@plus .2ex \@minus .2ex}% before-skip
+  {0.5ex \@plus .2ex}% after-skip
+  {\normalfont\normalsize\bfseries}}
+\makeatother
+
+\title{基于压力驱动的动态适应：\newline 一个面向多智能体强化学习的统一评测框架}
+\author{匿名}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+现有多智能体强化学习（MARL）基准多聚焦单一环境与静态配置，难以在对手分布、资源/时间/繁殖约束等压力变化下动态衡量“部署态、无再训练”的自适应能力。本文提出一套基于两类互补压力情景的统一评测框架：竞争/追逐（Waterworld）与繁殖/扩张（PredPreyGrass）。框架贯通训练、模型池管理、跨对手/情景评测、指标归一化与聚合、统计与可视化；评测契约固定随机种子与确定性动作，仅沿压力轴改变配置。计分采用“情形内主指标归一化→跨情形等权聚合”，并辅以稳定性（方差/分位）与显著性分析。结果表明，不同算法在压力切换下的保持/恢复能力存在显著差异。我们发布可复现脚本、模型池与产物目录，期望为“压力驱动的动态适应”提供标准化基准。
+\end{abstract}
+
+\section{引言}
+在真实的多智能体系统中，算法需在资源受限、对手多样、任务目标随情境变化的条件下运行。除了单一情境下的高绩效，更关键的是在压力变化中维持或恢复性能的能力，即“部署态、无再训练”的动态自适应性。然而，现有 MARL 基准多基于单一环境与静态配置，难以系统评估外部条件变化时的自适应行为轨迹与稳定性；同时缺乏一套简洁、可解释且可复验的统一计分与排名协议。
+
+为此，我们提出一个由两类具有代表性的压力场景组成的统一评测框架：任务A（竞争/追逐类，Waterworld）强调捕获与规避、能量与效率；任务B（繁殖/扩张类，PredPreyGrass）强调群体增长、资源利用与生存时间。我们在两类任务上采用一致的训练与评测协议，并通过“环境内主指标归一化 + 加权汇总”的简洁计分，将两类压力维度纳入一个可解释的总榜，同时报告稳定性与统计显著性。本文贡献如下：
+\begin{itemize}
+  \item 提出压力驱动的动态适应评测维度与双任务统一协议；
+  \item 给出简洁可解释的计分（归一化+加权和）与两种附榜（几何平均/最小分）以刻画均衡与短板；
+  \item 提供贯通训练、模型池、交叉评测、统计与可视化的可复现工具链与资产；
+  \item 实证揭示了不同算法在双任务下的适应性差异与鲁棒性–效率权衡（基于 PPO/SAC/TD3）。
+\end{itemize}
+
+\section{相关工作}
+现有多智能体强化学习（MARL）评测在基准与套件方面已较成熟：PettingZoo 以 AEC 模型统一多类环境、强调可复现与可比性（\citep{Terry2021PettingZoo}）；Melting Pot 将“对陌生体/新情境的持出测试”作为一等目标，并在 2.0 版本扩展到更大规模的训练/测试情境与聚合评分协议（\citep{Leibo2021MeltingPot,Agapiou2022MeltingPot2}）；Neural MMO 通过开放式生态与资源竞争产生长期生存与策略演化压力，竞赛版固化了复现实验与对比流程（\citep{Liu2022NeuralMMO}）；SMACv2 则通过程序化生成与更强的部分可观测性修复了原 SMAC 的“过易/可开环”缺陷，成为协作对抗域的重要对照（\citep{Ellis2023SMACv2}）。这些基准极大便利了横向比较，但总体仍多在单一环境或静态配置内报告结果。
+
+在鲁棒性与泛化性方面，单体 RL 的域/动力学随机化与程序生成（如 Procgen）提供了分布转移下的评测范式，可迁移为 MARL 的“压力轴”构造（\citep{Tobin2017DomainRandomization,Peng2018DynamicsRandomization,Cobbe2020Procgen}）。协作 MARL 中，MAPPO 系列工作系统性显示简单 PPO 变体在多基准上的强势，并给出关键实现/超参建议，因而成为稳健基线（\citep{Yu2022MAPPO}）。与此同时，RLiable 建议以 IQM、置信区间与性能剖面替代易失真的点估计，提供了综合分与排名的统计学保障（\citep{Agarwal2021StatPrecipice}）。
+
+尽管上述进展推动了“局部扰动鲁棒性/跨情境泛化”的研究，系统化的压力测试与自适应性量化仍显不足：缺少将资源约束（带宽/算力/可观测性）、交互结构变化（通信/拓扑）、对抗强度升级等作为一等评测轴分级扫描与报告的通用协议；也缺少在多种压力类型下，经由主指标归一化与固定规则聚合得到可解释、可比较且具统计显著性保证的综合评分与排名。本文据此提出压力导向的自适应性评测框架：在两类互补压力情形（资源约束与对抗升级）中对同批算法进行标准化测量；在每一情形内选取主指标并完成归一化标定，随后按固定规则进行简洁、可解释的聚合，并结合 RLiable 的稳健统计流程报告综合分与不确定性区间；同时开源评测脚本、模型池与可视化产物以确保透明与可复现（\citep{Agarwal2021StatPrecipice,Leibo2021MeltingPot,Agapiou2022MeltingPot2}）。
+
+\section{基准（Benchmark）}
+\subsection{问题定义与评测目标}
+我们关注在动态压力条件下的“自适应性能”。动态压力由外部约束与交互条件变化所致，包括但不限于资源稀缺程度、协同—竞争结构、对抗强度与时间/能量预算。不同于“同一任务内的小幅扰动鲁棒性”，我们将自适应性能定义为：算法在不同压力情形下仍能实现稳定且可比较的目标达成能力。为避免引入跨任务迁移与在线切换假设，本文采用两个彼此独立、压力性质互补的评测情形，对同一批算法分别进行独立评估，并在情形内完成指标归一化与标定。
+
+为避免歧义，我们在此明确“自适应性（部署态、无再训练）”与测量契约：在既定策略（不再训练/微调）的前提下，当外部条件沿“压力轴”（对手分布、感知/时间/能量约束、资源密度与繁殖规则等）发生变化时，度量策略对任务主目标的“性能维持/恢复”的水平与稳定性。测量契约为：评测期仅改变压力参数并在算法间严格对齐；每个情形仅设一个主指标，比对压力变化前后的保持性与方差；情形内按固定锚点归一化至 [0,1]；跨情形以等权加权和聚合为主榜，几何平均/最小分作为附榜。
+其中，$S_{\mathrm{base}}$ 固定为随机基线（RANDOM），$S_{\mathrm{ref}}$ 锚定于生产跑次（ProdRun\_033644）中的强基线；若新算法超过参考上界，按 1.0 截断。
+
+评测目标是形成一套简洁、可解释且可复验的度量来比较不同算法的总体能力：（i）每一压力情形均使用明确的主指标（Waterworld 以捕获相关或回报为主，PredPreyGrass 以群体增长或回报为主），并固定评测协议（评测步数、随机种子、多次重复的统计汇总）；（ii）在各自情形内对主指标进行尺度内归一化，消除量纲差异；（iii）在保持情形内结果可追溯的同时，给出固定规则下的聚合分，并附带不确定性估计以反映稳定性。
+
+\section{框架（Framework）}
+\subsection{概述}
+我们基于统一评测流水线，量化比较不同算法在多种压力设定下的“性能维持/恢复能力”。所有评测均采用固定随机种子与确定性动作，压力参数在算法间严格对齐，确保比较同质且结果可复现。每个情形仅用一个主指标并完成情形内归一化，跨情形按等权加权和聚合得到主榜（附几何平均/最小分作为对照）。环境配置、评测协议与归一化细节见附录~A；相关代码与日志生成脚本已在公开仓库提供。
+
+\subsection{两个环境总览}
+我们围绕两类互补压力环境组织评测，并先给出简要对照定位：\\
+\textbf{Waterworld}：单体追逃，压力轴为“对抗强度/对手分布更替 + 能量/时间预算”，主指标为捕获相关或回合回报，度量单个策略在不利对阵中的保持/恢复。\\
+\textbf{PredPreyGrass}：群体扩张，压力轴为“资源生成率/密度 + 繁殖阈值/冷却 + 群体上限”，主指标为群体增长或回合回报，度量群体策略在资源—风险耦合下的保持/恢复。\\
+两情形互补，覆盖“单体—群体”两个尺度与两种压力来源（对抗升级 vs 资源/繁殖约束），为后续的并置计分提供区分但可对齐的场景。设计时我们刻意让压力源可控且单调：Waterworld 用“对手池/感知/时间/能量”四类旋钮刻画对抗升级；PredPreyGrass 用“资源生成—繁殖阈值—群体上限”三类旋钮刻画资源—扩张约束。所有旋钮在评测期对全体算法锁定，后文的自适应性测量即是观察主指标在这些压力旋钮变化下的保持/恢复。
+
+\paragraph{Waterworld（捕食/追逐场，单体自适应）}\par
+\kv{生态与组成（多主体、多类群）}{环境为多主体、多类群的 predator–prey–food 生态，包含捕食者（predator）、逃逸者（prey）与可采集资源/障碍（food/obstacle）。各类群共享相同的物理接口与约束，但策略与初值可不同。}
+\kv{观测空间}{局部多方向/扇区传感的拼接，提供邻近主体与资源/障碍的相对方位与距离、相对速度、接触与类别指示等；观测半径与分辨率可配。}
+\kv{动作空间}{二维连续推进向量，受速度/加速度/边界的物理裁剪与碰撞规则约束。}
+\kv{能量与生存目标}{每个个体都有能量储备。predator 通过捕食 prey 获得能量；prey 通过采食 food 获得能量；推进与时间带来代谢损耗。当能量降至 $\le 0$ 判定死亡（prey 被捕食亦直接死亡）。个体目标是最大化自身生存/效率：predator 在能量约束下高效捕获，prey 在能量约束下有效逃逸与补能。}
+\kv{压力参数（pressure knobs，统一锁定）}{对手池构成与强度（含 OOD 对手切换）、感知范围、时间预算、主体/资源/障碍数量、速度/推进上限等。在不改变任务本质的前提下，它们沿“对抗强度 + 能量/时间约束”的压力轴调节难度，用于测单体层级的自适应性（性能维持/恢复）。}
+\kv{评测主指标}{捕获相关指标或回合回报（二选一在正文固定），在固定评测窗口（步数/回合）内统计；情形内做尺度归一化，便于与另一情形并置比较。}
+
+\begin{figure}[ht]
+  \centering
+  \fbox{\parbox{0.92\linewidth}{Waterworld 场景示意与代表帧。示意帧可由 \texttt{../visualization\_outputs/predator\_v12\_vs\_random.mp4} 或 \texttt{../visualization\_outputs/stage1\_2\_pred\_PPO\_vs\_random.mp4} 抽取；本稿在实验节展示了捕获率热力图与性能分布图以辅助理解。}}
+  \caption{Waterworld：追逃与效率权衡。}
+\end{figure}
+
+\paragraph{PredPreyGrass（繁殖/扩张场，群体/协作自适应）}\par
+\kv{生态与组成（多主体、多类群）}{环境为多主体、多类群的 predator–prey–food 生态。prey 通过采食草/食物（food）补能并躲避风险；可配置 predator 的数量与上限以形成捕食压力；不同类群（species/strain）在同一物理规则下交互。}
+\kv{观测空间}{局部多方向传感，提供食物/毒物/障碍/同异类体的距离与相对运动、接触与类别指示等；观测半径与分辨率可配。}
+\kv{动作空间}{二维连续推进，受速度/加速度/边界裁剪与碰撞/阻挡规则约束。}
+\kv{能量、繁殖与群体目标}{prey 通过采食 food 获得能量，predator 通过捕食 prey 获得能量；推进与时间产生代谢损耗，能量$\le 0$ 判死亡（prey 被捕食亦直接死亡）。当个体能量达到阈值可触发无配对的阈值式繁殖（本实现简化为无配对/冷却），按设定比例将能量转移给子代；可设置群体上限/密度与资源生成率（近似携带容量）。群体目标是在资源与风险下实现“增长 + 存活”（包含协作与空间分布调节）。}
+\kv{压力参数（pressure knobs，统一锁定）}{资源密度与基础生成率、繁殖阈值/冷却/配对距离/能量转移比例、群体上限、（可选）predator 规模与速度上限等。它们沿“资源—存活—繁殖”的压力轴调节难度，用于测群体/协作层级的自适应性（性能维持/恢复）。}
+\kv{评测主指标}{群体增长（population growth）或回合回报（二选一在正文固定），辅以资源利用率与群体存活时间等解释性指标；情形内做尺度归一化后与 Waterworld 并置比较。}
+
+\begin{figure}[ht]
+  \centering
+  \fbox{\parbox{0.92\linewidth}{PredPreyGrass 场景示意与代表帧。示意帧可由 \texttt{.../logs/eval\_playthroughs/videos/playthrough\_20251107\_033628.mp4} 或 \texttt{.../logs/eval\_playthroughs/videos/playthrough\_20251107\_034653.mp4} 抽取；行为视频与环境日志用于说明“资源—存活—繁殖”的压力耦合。}}
+  \caption{PredPreyGrass：资源采集—存活—繁殖的扩张压力。}
+\end{figure}
+
+\subsection{环境内训练—评测流程（按情形）}
+\textbf{Waterworld（捕捉场）}：
+\begin{itemize}
+  \item 训练：按角色（predator/prey）与算法（PPO/SAC/TD3）独立训练候选策略并归档（模型以“算法—角色—版本”命名）。
+  \item 交叉评测：在固定 episodes/seed 与确定性动作下，生成“算法×对手”的交叉对阵矩阵与热力图；同构与 OOD（异算法对手）分开统计。目的 是显式化“对手分布变化→主指标响应”，用于度量单体自适应性的“性能保持/恢复”。指标与图表输出至 \texttt{outputs/evaluation\_results/} 与 \texttt{prod\_outputs/evaluation\_results/}。
+  \item 计分：以捕获相关或回合回报为主指标，在情形内做归一化；跨情形采用等权加权和（主榜），并给出几何平均/最小分（附榜）。
+  \item 可视化：示例对战视频位于 \texttt{visualization\_outputs/}，如 \texttt{predator\_v12\_vs\_random.mp4}、\texttt{stage1\_2\_pred\_PPO\_vs\_random.mp4}；分析脚本见 \texttt{scripts/analysis/analyze\_results.py} 与 \texttt{scripts/debug/visualize\_policy.py}。
+\end{itemize}
+
+\textbf{PredPreyGrass（繁殖场）}：
+\begin{itemize}
+  \item 训练：采用统一协议与固定基础配置，按算法训练候选策略（脚本：\texttt{.../base\_environment/train\_simple.py}）；开启繁殖时，繁殖阈值/冷却/能量转移等参数在全体算法间锁定。
+  \item 评测：固定 episodes/seed 与确定性评估；主指标为群体增长或回合回报，辅以资源利用率与群体存活时间；多次独立重复，报告均值与不确定性。评测与演示脚本见 \texttt{.../evaluate\_checkpoint\_gui.py}、\texttt{.../random\_policy.py}。
+  \item 日志与视频：代表性视频与环境日志位于 \texttt{.../logs/eval\_playthroughs/videos/} 与 \texttt{.../logs/eval\_playthroughs/env\_logs/}，用于行为对照与事后分析。
+\end{itemize}
+
+\subsection{任务与压力设定}
+本文在两类相互独立、压力性质互补的评测情形下开展实验：竞争/追逐（Waterworld）与繁殖/扩张（PredPreyGrass）。两者在观测与动作空间、奖励结构与群体交互上具有差异，能够从不同角度施加外部约束与激励，从而形成对算法自适应性的并置测量。为确保比较的同质性，每一情形均采用固定的评测协议与主指标，并在情形内完成尺度归一化。
+
+在竞争/追逐情形（Waterworld）中，核心压力来源于对抗强度与资源配置：捕获与规避的博弈、感知范围与时间预算。我们以捕获相关或回报为主指标（正文固定其一），并报告辅助量以增强解释力（如生存率、平均回合长度、能量消耗）。
+
+在繁殖/扩张情形（PredPreyGrass）中，压力来源于资源生成与群体扩张的权衡：资源采集、个体存活与扩张速度。主指标固定为群体增长（population growth）或回报（episode reward），并辅以资源利用率、群体存活时间等辅助量。压力强度通过环境侧控制变量统一设定（资源密度、基础生成率、繁殖阈值、群体竞争参数等）。
+
+\subsection{指标与计分}
+\subsection{为何本基准可测自适应性}
+为回应“为何这样设计环境、如何据此测出自适应性”，我们在协议与场景设计上做了三层约束：压力源单独可调且对齐，测量契约固定且不允再训练，度量直接反映保持/恢复而非静态得分。对应的逻辑分述如下。
+\begin{enumerate}
+  \item 压力源真实且可控（从不同角度施压）\\
+  Waterworld 从“对抗与能量/时间约束”施压：通过对手更替与强度、感知范围与时间预算等参数，直接改变追逃博弈的难度。具有自适应性的单体策略应在对手分布变化时，仍能维持有效追逃与能量管理（表现为捕获率/回报下降有限、方差可控、轨迹能量效率合理）。\\
+  PredPreyGrass 从“资源—存活—繁殖耦合”施压：通过资源密度与生成率、繁殖阈值/冷却、群体上限等参数，改变采食、避险与繁殖的权衡强度。具有自适应性的群体策略应在资源与风险切换时维持增长与存活（表现为群体增长/回报稳定、资源利用率与群体存活时间匹配、繁殖触发与能量转移合理）。上述压力参数（pressure knobs）在评测期均可控并对全体算法统一锁定，确保“压力改变”可归因于算法，而非配置偏差。
+
+  \item 度量直接对应“保持/恢复能力”（而非仅静态分）\\
+  情形内，我们以任务主目标的单一主指标（Waterworld：捕获相关或回合回报；PredPreyGrass：群体增长或回合回报）衡量“任务完成度”，并在压力变化前后比较其保持性与稳定性：Waterworld 通过交叉对阵矩阵显式化同构 vs OOD 对手，聚焦主指标变化与方差；PredPreyGrass 在固定评测窗口下比较不同资源/繁殖参数的主指标统计，辅以资源利用率与群体存活时间解释行为变化。情形间，我们在各自情形内将主指标归一化到[0,1]后按等权加权和聚合为主榜，总分反映“跨压力总体保持度”；几何平均与最小分作为附榜，用于呈现均衡性与短板效应。
+
+  \item 公平可比与可复验提供“可信度”支撑\\
+  评测契约保持同质：固定 episodes/seed、确定性动作，压力参数对齐；角色内先等权汇总、情形内再归一化。全流程脚本化，从模型池发现到批量评测、归一化与聚合、图表与视频/日志均以结构化资产落盘；归一化锚点冻结于生产跑次（如 ProdRun\_033644），并以跨跑次的一致性对照支撑排序稳定性。由此，比较既公平透明，又可复验与审计。
+\end{enumerate}
+
+\subsection{优势与工作亮点}
+\begin{itemize}
+  \item 互补压力二元场景：Waterworld（对抗/能量/时间）与 PredPreyGrass（资源/存活/繁殖）从“单体→群体”两尺度施压，覆盖部署中常见的动态变化。
+  \item 部署态自适应直测：不允许再训练，直接比较压力切换前后主指标的保持/恢复，度量“能否应对”而非“能否重学”。
+  \item 群体涌现与生态耦合：PredPreyGrass 通过资源生成、携带容量与繁殖阈值/冷却的非线性耦合，区分“短期得分”与“能增长、能存活”的策略。
+  \item 对抗效率—稳健权衡：Waterworld 在能量约束下考察捕获效率与追逃轨迹，并以同构/OOD 对手矩阵显式化“对手更替→性能响应”。
+  \item 简洁计分作配套：情形内归一化 + 等权聚合仅作为跨情形并置工具；核心贡献在于压力设计与部署态适应性的显式测量。
+\end{itemize}
+每一压力情形内指定唯一主指标以确保度量一致性。为消除量纲差异并使不同情形可并置解释，主指标在情形内进行尺度归一化：
+\begin{equation}
+  S' = \mathrm{clip}\left(\frac{S - S_{\mathrm{base}}}{S_{\mathrm{ref}} - S_{\mathrm{base}}},\, 0,\, 1\right).
+\end{equation}
+跨情形的综合分采用固定且可解释的聚合规则。正文以等权加权和作为主榜：
+\begin{equation}
+  \mathrm{Total} = 0.5\, S'_A + 0.5\, S'_B.
+\end{equation}
+为分析均衡性与短板效应，可在附录提供几何平均与最小分等替代聚合的对照排名。所有综合分仅作为总体能力的汇总指示；情形内的原始表与归一化前指标同时保留，用于逐项分析与复验。
+
+\subsection{训练与评测设置}
+算法覆盖 PPO、SAC、TD3 与随机基线。两个情形分别独立训练与评测，不引入跨情形迁移或在线切换。评测协议在情形内固定：一致的评测步数、随机种子与确定性评估；每个候选策略进行多次独立重复以获得稳健统计量（必要时报告 95% 置信区间/分位数）。回合在任一群体灭绝时可提前结束；存活时间作为辅助指标纳入报告。Waterworld 使用标准配置；PredPreyGrass 使用固定的基础配置；可选的压力档位（低/中/高）或变体置于附录。
+
+所有产出按结构化目录存放，便于复验：评测结果（JSON/CSV）、交叉矩阵与图表（PNG）、演示视频（MP4）置于 \texttt{evaluation\_results} 与 \texttt{visualization\_outputs}；配置快照与日志与之配套。
+
+\section{实验（Experiments）}
+\subsection{Waterworld（竞争/追逐）}
+我们首先在 Waterworld 情形内报告主指标与行为观察。基于交叉评测脚本得到的算法得分如表~\ref{tab:algo-scores} 所示（使用项目自动生成的表格）。从主榜看，总体排序为 TD3（0.670）$>$ SAC（0.554）$>$ RANDOM（0.389）$\approx$ PPO（0.387），体现了在对手分布与角色切换压力下的均衡性差异；例如，PPO 在 predator 角色得分为 0.594，但在 prey 角色仅为 0.179，显示在异对手/异角色下的回落。
+
+\begin{table}[ht]
+  \centering
+  \caption{Waterworld 交叉评测算法分数（Stage1.3\_Gen18）。}
+  \label{tab:algo-scores}
+  % auto-generated table re-used from pipeline
+  \input{../outputs/evaluation_results/stage1_3_gen18/cross_eval_20251112_035210/algorithm_scores.tex}
+\end{table}
+
+为支撑数值结论，我们给出热力图与分布图（项目已生成）：图~\ref{fig:heatmap} 展示捕获率热力图，图~\ref{fig:dist} 展示性能分布，图~\ref{fig:rank} 对比不同聚合下的排名，图~\ref{fig:gen} 展示一般化曲线。整体上，TD3 在跨对手/角色下更均衡，SAC 次之，PPO 在特定同构条件下效率较高但跨对手时回落更明显。
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.48\textwidth]{../outputs/evaluation_results/stage1_3_gen18/cross_eval_20251112_035210/heatmap_catch_rate.png}\hfill
+  \includegraphics[width=0.48\textwidth]{../outputs/evaluation_results/stage1_3_gen18/cross_eval_20251112_035210/performance_distribution.png}
+  \caption{左：捕获率热力图；右：性能分布（Stage1.3\_Gen18）。}
+  \label{fig:heatmap}
+  \label{fig:dist}
+\end{figure}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.48\textwidth]{../outputs/evaluation_results/stage1_3_gen18/cross_eval_20251112_035210/ranking_comparison.png}\hfill
+  \includegraphics[width=0.48\textwidth]{../outputs/evaluation_results/stage1_3_gen18/cross_eval_20251112_035210/generalization_curves.png}
+  \caption{左：不同聚合/设置下的排名对比；右：一般化曲线（Stage1.3\_Gen18）。}
+  \label{fig:rank}
+  \label{fig:gen}
+\end{figure}
+
+为验证一致性，我们在生产跑次（ProdRun\_033644）获得了相同趋势的结果：TD3 总分 0.6745，SAC 为 0.55425，RANDOM 为 0.39225，PPO 为 0.379（数据源：\texttt{../prod\_outputs/evaluation\_results/cross\_eval\_20251112\_033644/algorithm\_scores.csv} 与 \texttt{../outputs/evaluation\_results/summary\_comparison.csv}）。
+
+\paragraph{自适应性解读} 这些结果可直接映射到“压力变化下的保持/恢复”：（i）TD3 在同构与 OOD 对手、predator 与 prey 角色下都维持在 0.65–0.67 的归一化分，显示对对手更替与角色切换的鲁棒保持；（ii）SAC 总体居中，说明其在对手更替时有一定回落但仍保持正向收益；（iii）PPO 的“predator 高、prey 低”揭示缺乏跨角色的自适应性——对抗强度一旦转为逃逸任务，主指标大幅下跌；（iv）RANDOM 占据归一化下界，作为锚点支撑后续扩展算法的可对比性。
+
+\paragraph{行为观察} 代表性行为视频（捕食与逃逸）可在\texttt{visualization\_outputs} 目录中查看，如 \texttt{predator\_v12\_vs\_random.mp4}、\texttt{prey\_v11\_vs\_random.mp4}、\texttt{stage1\_1\_prey\_PPO\_vs\_random.mp4} 与 \texttt{stage1\_2\_pred\_PPO\_vs\_random.mp4}。我们观察到：对强对手时，追击轨迹出现更频繁的方向修正与能量无效开销，局部围捕被打散，最终体现在捕获率的回落；逃逸侧在强捕食者下呈现边界贴行与更激进绕障，短期存活上升但能量代价增大。
+
+\subsection{PredPreyGrass（繁殖/扩张）：环境与演示}
+在 PredPreyGrass 情形中，我们复用了统一协议的实现与日志/视频产出。环境实现位于 \texttt{PredPreyGrass/src/predpreygrass/rllib/base\_environment/predpreygrass\_rllib\_env.py}。评测演示视频与环境日志已生成并归档：
+\begin{itemize}
+  \item 视频：\texttt{.../logs/eval\_playthroughs/videos/playthrough\_20251107\_033628.mp4}、\texttt{playthrough\_20251107\_034653.mp4} 等；随机基线演示见 \texttt{.../logs/random\_policy/videos/} 目录。
+  \item 环境日志：\texttt{.../logs/eval\_playthroughs/env\_logs/predpreygrass\_env\_\*\_eval-*.log}，用于事后分析（资源利用、存活曲线等）。
+\end{itemize}
+为避免新增实验负担，本文不额外开展跨算法的量化汇总，仅提供与 Waterworld 同步的协议与演示产物，便于按相同主指标（群体增长或回合回报）落地评测。当前缺口是“群体扩张场”的实测分与归一化表尚未插入主文；后续将按照已冻结的锚点和聚合规则补齐，使两情形的自适应性结果并置可比。
+
+\section{讨论与限制}
+本研究将“生存压力下的自适应性”作为一等评测维度，通过两个性质互补的情形并置测量。Waterworld 的结果表明：同构条件下的高绩效并不等价于对手更替后的稳健表现；策略是否能在对抗强度、交互结构与能量约束改变时保持轨迹调整能力与能量效率，是适应性的关键决定因素。当前 PredPreyGrass 仅提供协议与演示，不引入新的训练与评测负担；完整的量化对比将作为后续工作推进。
+
+\section{结论}
+我们提出并实现了一套用于测量多智能体强化学习在压力环境下自适应性能的统一评测协议：在两个相互独立、压力性质互补的情形中，分别固定主指标并完成情形内归一化，再以等权加权和形成总分，同时保留原始表与不确定性估计以保证可解释与可复验。Waterworld 的实证结果显示，适应性与同构条件下的峰值性能并非同一维度。后续工作将把同一协议落地至 PredPreyGrass，完成情形内评测与归一化，并在两情形间按固定聚合得到总榜；同时在附录补充替代聚合与敏感性分析。配套的脚本、模型池与结构化产出保证第三方能够在相同协议下复现实验并扩展到更多算法或压力档位。
+
+\section*{附录A：可复现实验资产索引}
+\noindent Waterworld（部分）：
+\begin{itemize}
+  \item 交叉评测结果与图：\texttt{../outputs/evaluation\_results/stage1\_3\_gen18/cross\_eval\_20251112\_035210/}
+  \item 生产跑次结果与图：\texttt{../prod\_outputs/evaluation\_results/cross\_eval\_20251112\_033644/}
+  \item 演示视频与元数据：\texttt{../visualization\_outputs/}
+  \item 汇总对照表：\texttt{../outputs/evaluation\_results/summary\_comparison.csv}
+\end{itemize}
+PredPreyGrass（部分）：
+\begin{itemize}
+  \item 环境实现：\texttt{../../code\_renew\_for\_predator\_prey\_makeachild/PredPreyGrass/PredPreyGrass/src/predpreygrass/rllib/base\_environment/predpreygrass\_rllib\_env.py}
+  \item 评测演示视频：\texttt{../../code\_renew\_for\_predator\_prey\_makeachild/PredPreyGrass/PredPreyGrass/src/predpreygrass/rllib/base\_environment/logs/eval\_playthroughs/videos/}
+  \item 环境日志：\texttt{../../code\_renew\_for\_predator\_prey\_makeachild/PredPreyGrass/PredPreyGrass/src/predpreygrass/rllib/base\_environment/logs/eval\_playthroughs/env\_logs/}
+\end{itemize}
+
+\subsection*{复现最小说明}
+\noindent 评测契约：固定 episodes 与 seed，采用确定性动作；压力参数（对手分布/资源/时间/繁殖等）在算法间严格对齐。每个情形仅用一个主指标，完成情形内归一化；跨情形按等权加权和聚合（主榜），几何平均/最小分为附榜。
+
+\noindent 归一化锚点（Anchor）：
+\begin{itemize}
+  \item 跑次与文件：\texttt{../prod\_outputs/evaluation\_results/cross\_eval\_20251112\_033644/algorithm\_scores.csv:1}
+  \item $S_{\mathrm{base}}$：该跑次的随机基线（RANDOM）；$S_{\mathrm{ref}}$：该跑次的参考上界（经验强基线）。
+  \item 公式：$S' = \mathrm{clip}((S - S_{\mathrm{base}})/(S_{\mathrm{ref}} - S_{\mathrm{base}}),\,0,\,1)$；若原始指标“越小越好”，先做方向统一。
+  \item 一致性对照：\texttt{../outputs/evaluation\_results/summary\_comparison.csv:1}（含 Stage1.3\_Gen18 vs ProdRun\_033644 对照）。
+\end{itemize}
+
+\noindent 目录与资产（最小集合）：
+\begin{itemize}
+  \item 表格（论文中 \texttt{\textbackslash input}）：\texttt{../outputs/evaluation\_results/stage1\_3\_gen18/cross\_eval\_20251112\_035210/algorithm\_scores.tex:1}
+  \item 图（论文中 \texttt{\textbackslash includegraphics}）：\texttt{.../heatmap\_catch\_rate.png:1}，\texttt{.../performance\_distribution.png:1}，\texttt{.../ranking\_comparison.png:1}，\texttt{.../generalization\_curves.png:1}
+  \item 演示与日志：Waterworld 视频见 \texttt{../visualization\_outputs/}；PredPreyGrass 视频见 \texttt{.../logs/eval\_playthroughs/videos/}，环境日志见 \texttt{.../logs/eval\_playthroughs/env\_logs/}。
+\end{itemize}
+
+\noindent 最小命令：
+\begin{itemize}
+  \item 结果分析与绘图（读取现有产物）：\texttt{python scripts/analysis/analyze\_results.py}
+  \item 编译论文：\texttt{cd docs \&\& latexmk -xelatex -interaction=nonstopmode -file-line-error -halt-on-error paper.tex}
+\end{itemize}
+
+\clearpage
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

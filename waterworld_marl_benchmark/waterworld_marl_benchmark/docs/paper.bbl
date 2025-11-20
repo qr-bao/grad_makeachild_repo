@@ -1,0 +1,88 @@
+\begin{thebibliography}{10}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Agapiou et~al.(2022)Agapiou, Vezhnevets, Du{\'e}{\~n}ez-Guzm{\'a}n,
+  Leibo, et~al.]{Agapiou2022MeltingPot2}
+John~P. Agapiou, Alexander~S. Vezhnevets, Edgar~A. Du{\'e}{\~n}ez-Guzm{\'a}n,
+  Joel~Z. Leibo, et~al.
+\newblock Melting pot 2.0, 2022.
+
+\bibitem[Agarwal et~al.(2021)Agarwal, Schwarzer, Castro, Courville, and
+  Bellemare]{Agarwal2021StatPrecipice}
+Rishabh Agarwal, Max Schwarzer, Pablo~Samuel Castro, Aaron Courville, and
+  Marc~G. Bellemare.
+\newblock Deep reinforcement learning at the edge of the statistical precipice.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, 2021.
+
+\bibitem[Cobbe et~al.(2020)Cobbe, Hesse, Hilton, and
+  Schulman]{Cobbe2020Procgen}
+Karl Cobbe, Christopher Hesse, Jacob Hilton, and John Schulman.
+\newblock Leveraging procedural generation to benchmark reinforcement learning.
+\newblock In \emph{Proceedings of the 37th International Conference on Machine
+  Learning (ICML)}, pages 2048--2056, 2020.
+
+\bibitem[Ellis et~al.(2023)Ellis, Cook, Moalla, et~al.]{Ellis2023SMACv2}
+Benjamin Ellis, Joshua Cook, Selim Moalla, et~al.
+\newblock Smacv2: An improved benchmark for cooperative multi-agent
+  reinforcement learning.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS),
+  Datasets and Benchmarks Track}, 2023.
+
+\bibitem[Leibo et~al.(2021)Leibo, Du{\'e}{\~n}ez-Guzm{\'a}n, Vezhnevets,
+  Agapiou, Beattie, and Graepel]{Leibo2021MeltingPot}
+Joel~Z. Leibo, Edgar~A. Du{\'e}{\~n}ez-Guzm{\'a}n, Alexander Vezhnevets,
+  John~P. Agapiou, Charles Beattie, and Thore Graepel.
+\newblock Scalable evaluation of multi-agent reinforcement learning with
+  melting pot.
+\newblock In \emph{Proceedings of the 38th International Conference on Machine
+  Learning (ICML)}, pages 6187--6199, 2021.
+
+\bibitem[Liu et~al.(2022)Liu, Suarez, You, et~al.]{Liu2022NeuralMMO}
+Eric Liu, Joseph Suarez, Cathy You, et~al.
+\newblock The neurips 2022 neural mmo challenge: A massively multiagent
+  competition with specialization and trade.
+\newblock In \emph{Proceedings of the NeurIPS 2022 Competition and
+  Demonstration Track (PMLR Vol. 220)}, pages 18--34, 2022.
+
+\bibitem[Peng et~al.(2018)Peng, Andrychowicz, Zaremba, and
+  Abbeel]{Peng2018DynamicsRandomization}
+Xue~Bin Peng, Marcin Andrychowicz, Wojciech Zaremba, and Pieter Abbeel.
+\newblock Sim-to-real transfer of robotic control with dynamics randomization.
+\newblock In \emph{IEEE International Conference on Robotics and Automation
+  (ICRA)}, 2018.
+
+\bibitem[Terry et~al.(2021)Terry, Black, Grammel, Jayakumar, Santos,
+  Dieffendahl, Williams, Lokesh, Sullivan, Horsch, Ravi, Rolls, Lokesh, Terry,
+  and DeCoro]{Terry2021PettingZoo}
+Jordan~K. Terry, Benjamin Black, Nathaniel Grammel, Mahesh Jayakumar, Luis~C.
+  Santos, Clemens Dieffendahl, Niall Williams, Angelique Lokesh, Katy Sullivan,
+  Carlo Horsch, Sujoy Ravi, David~A. Rolls, Nithin Lokesh, Tim~K. Terry, and
+  Christopher DeCoro.
+\newblock Pettingzoo: Gym for multi-agent reinforcement learning.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS),
+  Datasets and Benchmarks Track}, 2021.
+
+\bibitem[Tobin et~al.(2017)Tobin, Fong, Ray, Schneider, Zaremba, and
+  Abbeel]{Tobin2017DomainRandomization}
+Josh Tobin, Rachel Fong, Alex Ray, Jonas Schneider, Wojciech Zaremba, and
+  Pieter Abbeel.
+\newblock Domain randomization for transferring deep neural networks from
+  simulation to the real world.
+\newblock In \emph{IEEE/RSJ International Conference on Intelligent Robots and
+  Systems (IROS)}, 2017.
+
+\bibitem[Yu et~al.(2022)Yu, Velu, Vinitsky, Wang, Wu, Bayen, Hale, Russell,
+  Keutzer, Ma, Li, and Calandra]{Yu2022MAPPO}
+Chao Yu, Akash Velu, Eugene Vinitsky, Yu~Wang, Yuxiao Wu, Alexandre Bayen,
+  Matthew Hale, Stuart Russell, Kurt Keutzer, Tengyu Ma, Yi~Li, and Roberto
+  Calandra.
+\newblock The surprising effectiveness of ppo in cooperative multi-agent games.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS),
+  Datasets and Benchmarks Track}, 2022.
+
+\end{thebibliography}
