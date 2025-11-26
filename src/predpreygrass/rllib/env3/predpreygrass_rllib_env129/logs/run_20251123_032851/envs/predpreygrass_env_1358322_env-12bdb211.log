@@ -1,0 +1,2 @@
+2025-11-23 03:29:01,947 [INFO] PredPreyGrassEnv.env-12bdb211: event=logger_initialised | env_id=env-12bdb211 | log_path=logs/run_20251123_032851/envs/predpreygrass_env_1358322_env-12bdb211.log | level=DEBUG
+2025-11-23 03:29:01,955 [INFO] PredPreyGrassEnv.env-12bdb211: event=InitComplete | env_id=env-12bdb211 | step=NA | enable_continuous_space=True | world_size=[800, 800] | grid_size=10 | possible_agents=40000 | initial_agents=25 | max_steps=800 | action_space_type='continuous' | log_path='logs/run_20251123_032851/envs/predpreygrass_env_1358322_env-12bdb211.log'
