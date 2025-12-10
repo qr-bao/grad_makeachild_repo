@@ -99,6 +99,14 @@ def _compute_episode_metrics(raw: Dict[str, float]) -> Dict[str, float]:
         else math.nan
     )
     metrics["episode_steps"] = T
+
+    for key, value in raw.items():
+        if isinstance(key, str) and key.startswith("pop_"):
+            try:
+                metrics[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+
     return metrics
 
 

@@ -36,6 +36,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--explore", action="store_true")
     parser.add_argument(
+        "--record-video",
+        type=Path,
+        default=None,
+        help="Optional path to save an MP4 recording of the session.",
+    )
+    parser.add_argument(
         "--env-config-file",
         type=Path,
         default=None,
@@ -96,12 +102,33 @@ def main() -> None:
     latest_obs.update(observations)
 
     visualizer = PredPreyVisualizer(env, fps=args.fps)
+    video_writer = None
+    if args.record_video:
+        try:
+            import imageio.v2 as imageio
+        except ImportError as exc:
+            raise RuntimeError(
+                "imageio is required for video recording. Install with `pip install imageio`."
+            ) from exc
+        record_path = args.record_video.expanduser().resolve()
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        video_writer = imageio.get_writer(record_path, fps=args.fps)
+
     step_count = 0
     frame_interval = 1.0 / max(args.fps, 1)
     last_frame_time = time.time()
 
     try:
-        while visualizer.render() and step_count < args.max_steps:
+        while step_count < args.max_steps:
+            keep_running = visualizer.render()
+            if video_writer and keep_running:
+                frame = visualizer.capture_frame()
+                if frame is not None:
+                    video_writer.append_data(frame)
+
+            if not keep_running:
+                break
+
             if visualizer.paused:
                 time.sleep(0.01)
                 continue
@@ -120,12 +147,14 @@ def main() -> None:
                     continue
                 policy_id = infer_policy_id(agent_id)
                 policy = policies[policy_id]
-                action, _, _ = policy.compute_single_action(
-                    obs_vector,
+                # Use batched API to avoid single_action length assertions.
+                batched_actions, _, _ = policy.compute_actions(
+                    [obs_vector],
                     explore=args.explore,
                     unsquash_action=False,
                     clip_action=False,
                 )
+                action = batched_actions[0]
                 actions[agent_id] = np.asarray(action, dtype=np.float32)
 
             new_obs, rewards, terminations, truncations, infos = env.step(actions)
@@ -141,6 +170,8 @@ def main() -> None:
         print(f"[INFO] Simulation finished after {step_count} steps.")
 
     finally:
+        if video_writer:
+            video_writer.close()
         visualizer.close()
         algo.stop()
         ray.shutdown()

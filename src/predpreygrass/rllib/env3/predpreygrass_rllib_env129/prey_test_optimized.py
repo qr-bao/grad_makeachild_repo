@@ -3,6 +3,7 @@ Prey策略测试 - 数学策略 vs Rampage 对照
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -32,6 +33,38 @@ from predpreygrass.rllib.env3.predpreygrass_rllib_env129.config.config_env_base 
 #     config_env_base,
 # )
 prey_test_config = config_env_base
+
+
+def load_env_config(path: Path) -> Dict:
+    path = path.expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Env config file not found: {path}")
+    if path.suffix.lower() == ".json":
+        return json.loads(path.read_text(encoding="utf-8"))
+    # For Python config files, load as a module to honor relative imports.
+    import importlib
+    import importlib.util
+    import sys
+
+    # 1) Try absolute import via package path (works for in-repo configs with relative imports).
+    try:
+        module_name = "predpreygrass.rllib.env3.predpreygrass_rllib_env129.config." + path.stem
+        module = importlib.import_module(module_name)
+        return getattr(module, "config_env", None) or getattr(module, "config_env_base", None) or getattr(module, "config", {})
+    except Exception:
+        # 2) Fallback: load by file path without package context.
+        spec = importlib.util.spec_from_file_location("env_cfg", path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load config module from {path}")
+        module = importlib.util.module_from_spec(spec)
+        # Allow relative imports to find sibling files.
+        sys.path.insert(0, str(path.parent))
+        try:
+            spec.loader.exec_module(module)  # type: ignore[call-arg]
+        finally:
+            if sys.path and sys.path[0] == str(path.parent):
+                sys.path.pop(0)
+        return getattr(module, "config_env", None) or getattr(module, "config_env_base", None) or getattr(module, "config", {})
 
 
 class SensorPolicyBase:
@@ -426,6 +459,8 @@ def run_prey_test_v3(
     target_fps: int = 30,
     verbose: bool = False,
     predator_count: Optional[int] = None,
+    record_video: Optional[Path] = None,
+    base_config: Optional[Dict] = None,
 ):
     print("\n" + "=" * 70)
     print("🧪 PREY STRATEGY TEST (Math vs Rampage)")
@@ -459,7 +494,8 @@ def run_prey_test_v3(
         # # 'thrust_scale_predator': 100.0,
 
     }
-    config = {**prey_test_config, **config_overrides}
+    cfg_source = base_config or prey_test_config
+    config = {**cfg_source, **config_overrides}
     if predator_count is not None:
         predator_count = max(0, int(predator_count))
         config["n_initial_active_predator"] = predator_count
@@ -478,12 +514,55 @@ def run_prey_test_v3(
 
     math_policy = SimplePreyMathPolicy(env)
     math_policy.reset()
-    math_policy_populations = {0}
     rampage_agent = RampageAgent(env)
     predator_policy = PredatorChasePolicy(env)
 
+    def normalise_label(label: str | None) -> str:
+        return (label or "").lower()
+
+    predator_plan = getattr(env, "population_plan", {}).get("predator") or ["default"]
+    prey_plan = getattr(env, "population_plan", {}).get("prey") or ["default"]
+    # 保证长度至少覆盖 n_populations
+    if len(predator_plan) < env.n_populations:
+        predator_plan = (predator_plan * (env.n_populations // len(predator_plan) + 1))[: env.n_populations]
+    if len(prey_plan) < env.n_populations:
+        prey_plan = (prey_plan * (env.n_populations // len(prey_plan) + 1))[: env.n_populations]
+
+    predator_policy_by_pop: Dict[int, str] = {}
+    prey_policy_by_pop: Dict[int, str] = {}
+
+    for pop_id, label in enumerate(predator_plan[: env.n_populations]):
+        key = normalise_label(label)
+        if "random" in key or "rampage" in key:
+            predator_policy_by_pop[pop_id] = "random"
+        else:
+            predator_policy_by_pop[pop_id] = "chase"
+
+    for pop_id, label in enumerate(prey_plan[: env.n_populations]):
+        key = normalise_label(label)
+        if "random" in key or "rampage" in key:
+            prey_policy_by_pop[pop_id] = "random"
+        else:
+            # 默认视为 math（代表学习策略）
+            prey_policy_by_pop[pop_id] = "math"
+
+    math_policy_populations = {
+        pop_id for pop_id, mode in prey_policy_by_pop.items() if mode == "math"
+    }
+
     monitor = PreyTestMonitor(env)
     visualizer = PredPreyVisualizer(env, width=1650, height=800, fps=target_fps)
+    video_writer = None
+    if record_video:
+        try:
+            import imageio.v2 as imageio
+        except ImportError as exc:  # pragma: no cover - runtime guard
+            raise RuntimeError(
+                "imageio is required for video recording. Install with `pip install imageio`."
+            ) from exc
+        record_path = record_video.expanduser().resolve()
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        video_writer = imageio.get_writer(str(record_path), fps=target_fps)
 
     print("\nControls: SPACE pause, ↑/↓ speed, R reset, ESC quit\n")
 
@@ -495,6 +574,11 @@ def run_prey_test_v3(
 
     try:
         while visualizer.render():
+            if video_writer:
+                frame = visualizer.capture_frame()
+                if frame is not None:
+                    video_writer.append_data(frame)
+
             if visualizer.paused:
                 time.sleep(0.01)
                 last_frame_time = time.time()
@@ -510,14 +594,20 @@ def run_prey_test_v3(
             try:
                 for agent_id in env.agents:
                     agent_obs = latest_obs.get(agent_id)
-                    if "predator" in agent_id:
-                        actions[agent_id] = predator_policy.get_action(agent_id, agent_obs)
-                    else:
-                        pop_id = env.agent_population_id.get(agent_id, 0)
-                        if pop_id in math_policy_populations:
-                            actions[agent_id] = math_policy.get_action(agent_id, agent_obs)
-                        else:
+                    is_predator = "predator" in agent_id
+                    pop_id = env.agent_population_id.get(agent_id, 0)
+                    if is_predator:
+                        mode = predator_policy_by_pop.get(pop_id, "chase")
+                        if mode == "random":
                             actions[agent_id] = rampage_agent.get_action(agent_id)
+                        else:
+                            actions[agent_id] = predator_policy.get_action(agent_id, agent_obs)
+                    else:
+                        mode = prey_policy_by_pop.get(pop_id, "math")
+                        if mode == "random":
+                            actions[agent_id] = rampage_agent.get_action(agent_id)
+                        else:
+                            actions[agent_id] = math_policy.get_action(agent_id, agent_obs)
             except Exception as exc:
                 print(f"\n❌ ERROR collecting actions: {exc}")
                 import traceback
@@ -589,6 +679,10 @@ def run_prey_test_v3(
                 print("\n   Pausing for review... Press R to restart or ESC to quit")
 
                 while visualizer.render():
+                    if video_writer:
+                        frame = visualizer.capture_frame()
+                        if frame is not None:
+                            video_writer.append_data(frame)
                     time.sleep(0.1)
                     if visualizer.paused and visualizer.running:
                         print("\n🔄 Resetting environment...")
@@ -611,6 +705,8 @@ def run_prey_test_v3(
     finally:
         print(monitor.summarise())
         print("👋 Closing visualizer...")
+        if video_writer:
+            video_writer.close()
         visualizer.close()
         print("✅ Test complete!\n")
         return monitor.history
@@ -634,15 +730,32 @@ def main() -> Dict[str, list]:
         action="store_true",
         help="Shortcut for running without any predators (sets predator-count=0).",
     )
+    parser.add_argument(
+        "--record-video",
+        type=Path,
+        default=None,
+        help="Optional path to save an MP4 recording of the session.",
+    )
+    parser.add_argument(
+        "--env-config",
+        type=Path,
+        default=None,
+        help="Optional path to env config (json/py). Defaults to built-in config_env_base.",
+    )
     args = parser.parse_args()
 
     predator_count = 0 if args.prey_only else args.predator_count
+    base_config = None
+    if args.env_config:
+        base_config = load_env_config(args.env_config)
 
     return run_prey_test_v3(
         max_steps=args.steps,
         target_fps=args.fps,
         verbose=args.verbose,
         predator_count=predator_count,
+        record_video=args.record_video,
+        base_config=base_config,
     )
 
 

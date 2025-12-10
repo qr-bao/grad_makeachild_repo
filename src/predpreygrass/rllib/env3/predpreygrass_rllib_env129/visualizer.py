@@ -8,6 +8,7 @@ import os
 import csv
 from datetime import datetime
 from typing import Optional, Tuple, Dict, List
+import colorsys
 from predpreygrass.rllib.env3.predpreygrass_rllib_env129.observation_visualizer import (
     ObservationSpaceVisualizer,
 )
@@ -90,6 +91,9 @@ class PredPreyVisualizer:
             width=self.obs_width,
             height=height
         )
+
+        # 初始化颜色映射（相同算法=相同颜色）
+        self._init_population_colors()
         
         # 状态变量
         self.selected_agent = None
@@ -105,6 +109,34 @@ class PredPreyVisualizer:
         self.data_save_interval = 100  # 每100步保存一次数据
         self.last_save_step = 0
         
+    def _init_population_colors(self):
+        """为不同算法/种群分配固定颜色"""
+        base_palette = [
+            (229, 57, 53),
+            (30, 136, 229),
+            (67, 160, 71),
+            (251, 192, 45),
+            (142, 36, 170),
+            (0, 172, 193),
+            (244, 143, 177),
+            (255, 87, 34),
+        ]
+
+        def generate_color(idx: int) -> Tuple[int, int, int]:
+            if idx < len(base_palette):
+                return base_palette[idx]
+            hue = (idx * 0.167) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(hue, 0.6, 0.92)
+            return int(r * 255), int(g * 255), int(b * 255)
+
+        self.population_colors: Dict[str, Tuple[int, int, int]] = {}
+        palette_idx = 0
+        for species in ("predator", "prey"):
+            for label in self.env.population_plan.get(species, []):
+                if label not in self.population_colors:
+                    self.population_colors[label] = generate_color(palette_idx)
+                    palette_idx += 1
+
     def _setup_data_folder(self):
         """创建数据保存文件夹"""
         # 创建主数据文件夹
@@ -242,6 +274,15 @@ class PredPreyVisualizer:
             import traceback
             traceback.print_exc()
             return False
+
+    def capture_frame(self) -> Optional[np.ndarray]:
+        """Capture the current display surface as an array for video recording."""
+        surface = pygame.display.get_surface()
+        if surface is None:
+            return None
+        # Pygame returns (width, height, 3); transpose to (height, width, 3) for imageio.
+        frame = pygame.surfarray.array3d(surface)
+        return np.transpose(frame, (1, 0, 2))
     
     def _handle_events(self) -> bool:
         """处理用户输入事件"""
@@ -346,24 +387,20 @@ class PredPreyVisualizer:
             # 根据种群ID调整颜色
             pop_id = self.env.agent_population_id.get(agent_id, 0)
             
-            if "predator" in agent_id:
-                if pop_id == 0:
-                    color = (220, 50, 50)
-                elif pop_id == 1:
-                    color = (255, 100, 100)
-                else:
-                    color = self.COLOR_PREDATOR
-            else:
-                if pop_id == 0:
-                    color = (50, 120, 220)
-                elif pop_id == 1:
-                    color = (100, 170, 255)
-                else:
-                    color = self.COLOR_PREY
-            
+            algorithm_label = self.env.agent_algorithm.get(agent_id)
+            color = self.population_colors.get(
+                algorithm_label,
+                self.COLOR_PREDATOR if "predator" in agent_id else self.COLOR_PREY,
+            )
+
             # 绘制 agent
-            pygame.draw.circle(env_surface, color, (screen_x, screen_y), radius)
-            
+            if "predator" in agent_id:
+                pygame.draw.circle(env_surface, color, (screen_x, screen_y), radius)
+                pygame.draw.circle(env_surface, (30, 30, 30), (screen_x, screen_y), radius, 1)
+            else:
+                pygame.draw.circle(env_surface, self.COLOR_ENV_BG, (screen_x, screen_y), radius - 1)
+                pygame.draw.circle(env_surface, color, (screen_x, screen_y), radius, 3)
+
             # 刚吃东西的效果
             if agent_id in self.env.agents_just_ate:
                 pygame.draw.circle(
@@ -496,27 +533,39 @@ class PredPreyVisualizer:
         
         # 颜色生成函数
         def get_population_color(agent_type, pop_id):
-            if agent_type == "predator":
-                if pop_id == 0:
-                    return (220, 50, 50)
-                elif pop_id == 1:
-                    return (255, 100, 100)
-                else:
-                    offset = pop_id * 30
-                    return (min(255, 220 + offset), min(255, 50 + offset), 50)
-            else:
-                if pop_id == 0:
-                    return (50, 120, 220)
-                elif pop_id == 1:
-                    return (100, 170, 255)
-                else:
-                    offset = pop_id * 30
-                    return (50, min(255, 120 + offset), min(255, 220 + offset))
+            label = self.env.population_display_info.get(f"{agent_type}_{pop_id}")
+            fallback = self.COLOR_PREDATOR if agent_type == "predator" else self.COLOR_PREY
+            return self.population_colors.get(label, fallback)
         
         # 绘制Predator各种群曲线
+        def draw_dashed_line(surface, color, pts, dash_length=8):
+            if len(pts) < 2:
+                return
+            draw = True
+            acc = 0.0
+            for i in range(1, len(pts)):
+                p1 = pygame.Vector2(pts[i - 1])
+                p2 = pygame.Vector2(pts[i])
+                seg = p2 - p1
+                seg_len = seg.length()
+                if seg_len == 0:
+                    continue
+                seg_dir = seg.normalize()
+                start = p1
+                distance_covered = 0.0
+                while distance_covered < seg_len:
+                    step = min(dash_length - acc, seg_len - distance_covered)
+                    end = start + seg_dir * step
+                    if draw:
+                        pygame.draw.line(surface, color, start, end, 2)
+                    draw = not draw if acc + step >= dash_length else draw
+                    acc = (acc + step) % dash_length
+                    start = end
+                    distance_covered += step
+
         for pop_id, data in predator_data.items():
             if len(data) > 1:
-                points = [
+                predator_points = [
                     (
                         chart_x + int(i * x_scale),
                         chart_y + chart_h - int(data[i] * y_scale)
@@ -524,12 +573,12 @@ class PredPreyVisualizer:
                     for i in range(len(data))
                 ]
                 color = get_population_color("predator", pop_id)
-                pygame.draw.lines(chart_surface, color, False, points, 2)
+                pygame.draw.lines(chart_surface, color, False, predator_points, 3)
         
         # 绘制Prey各种群曲线
         for pop_id, data in prey_data.items():
             if len(data) > 1:
-                points = [
+                prey_points = [
                     (
                         chart_x + int(i * x_scale),
                         chart_y + chart_h - int(data[i] * y_scale)
@@ -537,7 +586,7 @@ class PredPreyVisualizer:
                     for i in range(len(data))
                 ]
                 color = get_population_color("prey", pop_id)
-                pygame.draw.lines(chart_surface, color, False, points, 2)
+                draw_dashed_line(chart_surface, color, prey_points, dash_length=10)
         
         # 图例
         legend_y = chart_y + chart_h + 10
@@ -551,7 +600,8 @@ class PredPreyVisualizer:
             color = get_population_color("predator", pop_id)
             x = legend_x_start + col * legend_spacing
             
-            pygame.draw.circle(chart_surface, color, (x + 10, legend_y), 5)
+            pygame.draw.circle(chart_surface, color, (x + 10, legend_y), 6)
+            pygame.draw.circle(chart_surface, (30, 30, 30), (x + 10, legend_y), 6, 1)
             
             algo_name = self.env.population_display_info.get(f"predator_{pop_id}", "?")
             current_count = predator_data[pop_id][-1] if predator_data[pop_id] else 0
@@ -572,7 +622,8 @@ class PredPreyVisualizer:
             color = get_population_color("prey", pop_id)
             x = legend_x_start + col * legend_spacing
             
-            pygame.draw.circle(chart_surface, color, (x + 10, legend_y), 5)
+            pygame.draw.circle(chart_surface, self.COLOR_PANEL_BG, (x + 10, legend_y), 6)
+            pygame.draw.circle(chart_surface, color, (x + 10, legend_y), 6, 2)
             
             algo_name = self.env.population_display_info.get(f"prey_{pop_id}", "?")
             current_count = prey_data[pop_id][-1] if prey_data[pop_id] else 0

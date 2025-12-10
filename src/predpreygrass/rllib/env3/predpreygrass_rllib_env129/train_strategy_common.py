@@ -89,11 +89,23 @@ def parse_args(default_predator_strategy: StrategyLiteral, default_prey_strategy
         help="Strategy applied to all predator agents.",
     )
     parser.add_argument(
+        "--predator-strategies",
+        type=str,
+        default=None,
+        help="Optional comma-separated per-population predator strategies (overrides --predator-strategy).",
+    )
+    parser.add_argument(
         "--prey-strategy",
         type=str,
         default=default_prey_strategy,
         choices=STRATEGY_CHOICES,
         help="Strategy applied to all prey agents.",
+    )
+    parser.add_argument(
+        "--prey-strategies",
+        type=str,
+        default=None,
+        help="Optional comma-separated per-population prey strategies (overrides --prey-strategy).",
     )
     parser.add_argument(
         "--eval-interval",
@@ -239,31 +251,68 @@ def run_training(
         print(f"Sample environment debug log file: {sample_env_log_path}")
     if hasattr(sample_env, "close"):
         sample_env.close()
+    n_populations = getattr(sample_env, "n_populations", base_env_config.get("n_populations", 1))
+    use_population_suffix = n_populations > 1
 
-    model_config = create_model_config()
-    multi_module_spec = MultiRLModuleSpec(
-        rl_module_specs={
-            "predator_policy": _module_spec_for_strategy(
-                predator_strategy,
-                obs_space_pred,
-                act_space_pred,
-                model_config,
-            ),
-            "prey_policy": _module_spec_for_strategy(
-                prey_strategy,
-                obs_space_prey,
-                act_space_prey,
-                model_config,
-            ),
-        }
+    def _policy_id(species: str, pop_id: int) -> str:
+        if use_population_suffix:
+            return f"{species}_pop{pop_id}_policy"
+        return f"{species}_policy"
+
+    base_train.configure_population_policy_mapping(
+        n_predator_pops=n_populations,
+        n_prey_pops=n_populations,
+        use_population_suffix=use_population_suffix,
+        predator_default=_policy_id("predator", 0),
+        prey_default=_policy_id("prey", 0),
     )
 
-    policies_to_train = _policies_to_train(predator_strategy, prey_strategy)
+    def _parse_strategy_list(raw: str | None, fallback: str, n: int) -> list[str]:
+        if not raw:
+            return [fallback] * n
+        values = [v.strip().lower() for v in raw.split(",") if v.strip()]
+        if not values:
+            return [fallback] * n
+        if any(v not in STRATEGY_CHOICES for v in values):
+            bad = [v for v in values if v not in STRATEGY_CHOICES]
+            raise ValueError(f"Invalid strategy in list: {bad}; allowed: {STRATEGY_CHOICES}")
+        if len(values) < n:
+            values.extend([values[-1]] * (n - len(values)))
+        return values[:n]
+
+    predator_strategies = _parse_strategy_list(args.predator_strategies, args.predator_strategy, n_populations)
+    prey_strategies = _parse_strategy_list(args.prey_strategies, args.prey_strategy, n_populations)
+
+    model_config = create_model_config()
+    rl_module_specs = {}
+    policies = {}
+    policies_to_train: list[str] = []
+
+    for pop_id in range(n_populations):
+        pred_policy_id = _policy_id("predator", pop_id)
+        prey_policy_id = _policy_id("prey", pop_id)
+
+        pred_strategy = predator_strategies[pop_id]
+        prey_strategy_local = prey_strategies[pop_id]
+
+        rl_module_specs[pred_policy_id] = _module_spec_for_strategy(
+            pred_strategy, obs_space_pred, act_space_pred, model_config
+        )
+        rl_module_specs[prey_policy_id] = _module_spec_for_strategy(
+            prey_strategy_local, obs_space_prey, act_space_prey, model_config
+        )
+
+        policies[pred_policy_id] = (None, obs_space_pred, act_space_pred, {})
+        policies[prey_policy_id] = (None, obs_space_prey, act_space_prey, {})
+
+        if pred_strategy == "ppo" and pred_policy_id not in policies_to_train:
+            policies_to_train.append(pred_policy_id)
+        if prey_strategy_local == "ppo" and prey_policy_id not in policies_to_train:
+            policies_to_train.append(prey_policy_id)
+
+    multi_module_spec = MultiRLModuleSpec(rl_module_specs=rl_module_specs)
     multi_agent_kwargs = {
-        "policies": {
-            "predator_policy": (None, obs_space_pred, act_space_pred, {}),
-            "prey_policy": (None, obs_space_prey, act_space_prey, {}),
-        },
+        "policies": policies,
         "policy_mapping_fn": policy_mapping_fn,
         "policies_to_train": policies_to_train,
     }

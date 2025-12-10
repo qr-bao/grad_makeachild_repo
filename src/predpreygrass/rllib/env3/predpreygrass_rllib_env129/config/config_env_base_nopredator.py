@@ -120,7 +120,7 @@ config_env_base = {
     "collision_damage": 0.3,
     "wall_collision_damage": 0.5,
     # === Simulation ===
-    "max_steps": 2000,
+    "max_steps": 500,
     "verbose_spawning": True,
     "verbose_engagement": True,
     "verbose_movement": True,

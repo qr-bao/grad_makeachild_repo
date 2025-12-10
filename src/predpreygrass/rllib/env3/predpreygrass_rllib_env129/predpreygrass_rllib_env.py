@@ -313,9 +313,49 @@ class PredPreyGrass(MultiAgentEnv):
     def _finalize_episode_metrics(self, infos: Dict[AgentID, Dict[str, Any]]) -> None:
         if getattr(self, "_episode_metrics_finalized", False):
             return
+
+        def _slugify(label: str) -> str:
+            label = (label or "").strip().lower()
+            slug_chars = []
+            for ch in label:
+                if ch.isalnum():
+                    slug_chars.append(ch)
+                else:
+                    slug_chars.append("_")
+            slug = "".join(slug_chars).strip("_")
+            return slug or "unknown"
+
         final_step = max(self.metrics.step_count, self.current_step)
         self.metrics.finalize_survivors(final_step)
         metrics_payload = self.metrics.build_metrics()
+
+        per_population_returns: Dict[Tuple[str, str], Dict[str, float]] = {}
+        for agent_id, total_return in self.cumulative_rewards.items():
+            species = "predator" if "predator" in agent_id else "prey"
+            pop_id = self.agent_population_id.get(agent_id, 0)
+            display_label = self.population_display_info.get(
+                f"{species}_{pop_id}", f"{species}_{pop_id}"
+            )
+            slug = _slugify(display_label)
+            key = (species, slug)
+            stats = per_population_returns.setdefault(
+                key,
+                {
+                    "sum": 0.0,
+                    "count": 0.0,
+                    "label": display_label,
+                },
+            )
+            stats["sum"] += float(total_return)
+            stats["count"] += 1.0
+
+        for (species, slug), stats in per_population_returns.items():
+            prefix = f"pop_{species}_{slug}"
+            count = max(stats["count"], 1.0)
+            metrics_payload[f"{prefix}_return_sum"] = stats["sum"]
+            metrics_payload[f"{prefix}_return_mean"] = stats["sum"] / count
+            metrics_payload[f"{prefix}_return_count"] = stats["count"]
+
         if metrics_payload:
             infos.setdefault("__common__", {})["episode_metrics"] = metrics_payload
             for agent in self.agents:
@@ -334,7 +374,8 @@ class PredPreyGrass(MultiAgentEnv):
         self.verbose_engagement = config.get("verbose_engagement", False)
         self.verbose_movement = config.get("verbose_movement", False)
         self.verbose_spawning = config.get("verbose_spawning", False)
-        self.max_steps = config.get("max_steps", 10000)
+        # Reduce default horizon to keep smoke tests quick; can be overridden in config.
+        self.max_steps = config.get("max_steps", 500)
         
         # === 2. 空间相关配置（必须在观察空间定义之前） ===
         self.enable_continuous_space = config.get("enable_continuous_space", True)
@@ -460,17 +501,40 @@ class PredPreyGrass(MultiAgentEnv):
         self.retired_agents: set[str] = set()
         self.used_ids_this_episode: Set[AgentID] = set()
         # === 新增：种群配置 ===
-        self.n_populations = config.get("n_populations", 2)        
+        population_plan = config.get("population_plan")
+        base_n = int(config.get("n_populations", 1))
+        if population_plan:
+            predator_plan = list(population_plan.get("predator", []))
+            prey_plan = list(population_plan.get("prey", []))
+            if not predator_plan or not prey_plan:
+                raise ValueError("population_plan must provide both predator and prey lists.")
+            if len(predator_plan) != len(prey_plan):
+                raise ValueError(
+                    f"population_plan predator/prey lengths must match (got {len(predator_plan)} vs {len(prey_plan)})."
+                )
+            self.population_plan = {
+                "predator": predator_plan,
+                "prey": prey_plan,
+            }
+            self.n_populations = len(predator_plan)
+        else:
+            if base_n <= 0:
+                raise ValueError("n_populations must be >= 1")
+            labels = [f"group_{i}" for i in range(base_n)]
+            self.population_plan = {
+                "predator": labels[:],
+                "prey": labels[:],
+            }
+            self.n_populations = base_n
+
         # 接收外部传入的算法显示信息（仅用于GUI显示）
-        self.population_display_info = config.get("population_display_info", {})
-        # 格式示例: {"predator_0": "PPO", "predator_1": "Random", "prey_0": "DQN"}
-        
+        self.population_display_info = config.get("population_display_info", {}) or {}
         # 如果没有提供，生成默认显示信息
         if not self.population_display_info:
-            for agent_type in ["predator", "prey"]:
-                for pop_id in range(self.n_populations):
+            for agent_type, labels in self.population_plan.items():
+                for pop_id, label in enumerate(labels):
                     pop_key = f"{agent_type}_{pop_id}"
-                    self.population_display_info[pop_key] = "Random"
+                    self.population_display_info[pop_key] = label
         # === 新增：草的局部密度系统 ===
         self.grass_perception_radius = config.get("grass_perception_radius", 100.0)
         self.grass_density_reference = config.get("grass_density_reference", 8.0)
@@ -515,7 +579,6 @@ class PredPreyGrass(MultiAgentEnv):
         self.enable_paired_reproduction = config.get("enable_paired_reproduction", False)
         self.mating_distance = config.get("mating_distance", 100.0)
         self.min_reproduction_health = config.get("min_reproduction_health", 70.0)
-        self.n_populations = config.get("n_populations", 2)
 
         # === 繁殖参数（按物种区分） ===
         default_repro_config = {
@@ -1388,6 +1451,9 @@ class PredPreyGrass(MultiAgentEnv):
         prey_ids, pred_ids, prey_energy_total, pred_energy_total = self._population_snapshot()
         self.metrics.reset(prey_ids, pred_ids, prey_energy_total, pred_energy_total)
 
+        # Populate infos with species/population metadata for policy mapping.
+        self._inject_population_info(infos, observations.keys())
+
         return observations, infos
 
 
@@ -1855,16 +1921,14 @@ class PredPreyGrass(MultiAgentEnv):
                     del self.agent_energies[agent]
                 self.agent_last_energy.pop(agent, None)
                 self.agent_recent_energy_delta.pop(agent, None)
-                if agent in self.agent_population_id:
-                    del self.agent_population_id[agent]
+                # 保留 population/algorithm 元数据，便于在 infos 中为已死亡智能体填充分种群信息
+                # 其余运行时状态可安全移除
                 if agent in self.agent_last_reproduction_step:
                     del self.agent_last_reproduction_step[agent]
                 if agent in self.agent_generation:
                     del self.agent_generation[agent]
                 if agent in self.agent_age:
                     del self.agent_age[agent]
-                if agent in self.agent_algorithm:
-                    del self.agent_algorithm[agent]
                 if agent in self.agent_wants_to_mate:
                     del self.agent_wants_to_mate[agent]
                 if agent in self.agent_steps_since_last_meal:
@@ -2277,6 +2341,9 @@ class PredPreyGrass(MultiAgentEnv):
         if terminations.get("__all__", False):
             self._finalize_episode_metrics(infos)
 
+        # Attach population metadata to infos for policy mapping downstream.
+        self._inject_population_info(infos, active_and_done_agents)
+
         # Increment step counter
         self.current_step += 1
 
@@ -2438,10 +2505,10 @@ class PredPreyGrass(MultiAgentEnv):
         xp, yp = self.agent_positions[agent]
         xlo, xhi, ylo, yhi, xolo, xohi, yolo, yohi = self._obs_clip(int(xp), int(yp), observation_range)
         
-        observation = np.zeros((self.num_obs_channels, observation_range, observation_range), dtype=np.float64)
+        observation = np.zeros((self.num_obs_channels, observation_range, observation_range), dtype=np.float32)
         observation[0].fill(1)
         observation[0, xolo:xohi, yolo:yohi] = 0
-        observation[1:, xolo:xohi, yolo:yhi] = self.grid_world_state[1:, xlo:xhi, ylo:yhi]
+        observation[1:, xolo:xohi, yolo:yhi] = self.grid_world_state[1:, xlo:xhi, ylo:yhi].astype(np.float32, copy=False)
         
         return observation
 
@@ -3937,4 +4004,25 @@ class PredPreyGrass(MultiAgentEnv):
             density_ratio = float(min(len(neighbor_ids) / reference, 1.0))
 
         return min_distance_ratio, density_ratio
+
+    # === Population metadata helpers ===
+    def _inject_population_info(
+        self,
+        infos: Dict[AgentID, Dict[str, Any]],
+        agents: Iterable[AgentID],
+    ) -> None:
+        """Ensure policy mapping can read population_id/species from infos."""
+        for agent in agents:
+            if agent == "__common__":
+                continue
+            meta = infos.setdefault(agent, {})
+            if "population_id" not in meta and agent in self.agent_population_id:
+                meta["population_id"] = self.agent_population_id[agent]
+            if "species" not in meta:
+                if "predator" in agent:
+                    meta["species"] = "predator"
+                elif "prey" in agent:
+                    meta["species"] = "prey"
+            if "population_key" not in meta and "species" in meta and "population_id" in meta:
+                meta["population_key"] = f"{meta['species']}_{meta['population_id']}"
     

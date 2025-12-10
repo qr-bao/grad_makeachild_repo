@@ -20,6 +20,7 @@ os.environ.setdefault("RLLIB_ENABLE_NEW_API_STACK", "0")
 
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
+from ray.rllib.algorithms.sac import SACConfig
 from ray.rllib.examples._old_api_stack.policy.random_policy import RandomPolicy
 from ray.tune import CheckpointConfig, RunConfig, Tuner
 from ray.tune.registry import register_env
@@ -98,7 +99,7 @@ def create_env_config():
 
 
 def create_model_config():
-    """连续空间模型配置"""
+    """连续空间模型配置（可在 main 中追加 LSTM 设置）"""
     return {
         "fcnet_hiddens": [256, 256, 128],
         "fcnet_activation": "relu",
@@ -107,6 +108,14 @@ def create_model_config():
 
 
 LOG_DIR_DEFAULT = Path("logs")
+_POLICY_MAPPING_STATE = {
+    "pred_default": "predator_policy",
+    "prey_default": "prey_policy",
+    "pred_n_pops": 1,
+    "prey_n_pops": 1,
+    "population_policy_map": {},
+    "use_population_suffix": False,
+}
 
 
 def _serialise(obj):
@@ -167,13 +176,149 @@ def setup_logger(log_dir: Path, log_level: str) -> logging.Logger:
     return logger
 
 
-def policy_mapping_fn(agent_id, *args, **kwargs):
-    """策略映射函数"""
-    if "predator" in agent_id:
-        return "predator_policy"
-    elif "prey" in agent_id:
-        return "prey_policy"
-    return None
+def configure_population_policy_mapping(
+    n_predator_pops: int = 1,
+    n_prey_pops: int = 1,
+    *,
+    use_population_suffix: bool = False,
+    population_policy_map: dict | None = None,
+    predator_default: str = "predator_policy",
+    prey_default: str = "prey_policy",
+) -> None:
+    """Configure how agent populations are mapped to policies.
+
+    Args:
+        n_predator_pops: Number of predator populations in the env.
+        n_prey_pops: Number of prey populations in the env.
+        use_population_suffix: If True, auto-generate policy ids as
+            ``{species}_pop{pop_id}_policy`` when no explicit mapping exists.
+        population_policy_map: Optional explicit map {(species, pop_id): policy_id}.
+        predator_default: Fallback policy id for predators.
+        prey_default: Fallback policy id for prey.
+    """
+    _POLICY_MAPPING_STATE["pred_n_pops"] = max(1, int(n_predator_pops))
+    _POLICY_MAPPING_STATE["prey_n_pops"] = max(1, int(n_prey_pops))
+    _POLICY_MAPPING_STATE["use_population_suffix"] = bool(use_population_suffix)
+    _POLICY_MAPPING_STATE["pred_default"] = predator_default
+    _POLICY_MAPPING_STATE["prey_default"] = prey_default
+    if population_policy_map is None:
+        _POLICY_MAPPING_STATE["population_policy_map"] = {}
+    else:
+        _POLICY_MAPPING_STATE["population_policy_map"] = dict(population_policy_map)
+
+
+def _get_last_info_for_agent(episode, agent_id: str) -> dict:
+    """Best-effort fetch of the latest info payload for an agent."""
+    if episode is None:
+        return {}
+    for getter in ("last_info_for",):
+        try:
+            fn = getattr(episode, getter, None)
+            if fn:
+                info = fn(agent_id)
+                if info:
+                    return info
+        except Exception:
+            pass
+    try:
+        info = episode._agent_to_last_info.get(agent_id)  # type: ignore[attr-defined]
+        if info:
+            return info
+    except Exception:
+        pass
+    return {}
+
+
+def policy_mapping_fn(agent_id, episode=None, *args, **kwargs):
+    """Population-aware policy mapping (falls back to species defaults)."""
+    info = _get_last_info_for_agent(episode, agent_id)
+    species = info.get("species")
+    if species is None:
+        if "predator" in agent_id:
+            species = "predator"
+        elif "prey" in agent_id:
+            species = "prey"
+    if species is None:
+        return None
+
+    pop_id = info.get("population_id")
+    try:
+        pop_id = int(pop_id) if pop_id is not None else None
+    except Exception:
+        pop_id = None
+
+    default_policy = (
+        _POLICY_MAPPING_STATE["pred_default"] if species == "predator" else _POLICY_MAPPING_STATE["prey_default"]
+    )
+
+    if pop_id is not None:
+        policy_map = _POLICY_MAPPING_STATE.get("population_policy_map", {})
+        key = (species, pop_id)
+        if key in policy_map:
+            return policy_map[key]
+
+        if _POLICY_MAPPING_STATE.get("use_population_suffix"):
+            if species == "predator":
+                pop_id = min(pop_id, _POLICY_MAPPING_STATE["pred_n_pops"] - 1)
+            else:
+                pop_id = min(pop_id, _POLICY_MAPPING_STATE["prey_n_pops"] - 1)
+            return f"{species}_pop{pop_id}_policy"
+
+    return default_policy
+
+
+def build_population_policies(
+    *,
+    n_predator_pops: int,
+    n_prey_pops: int,
+    predator_strategies: list[str],
+    prey_strategies: list[str],
+    obs_space_pred,
+    act_space_pred,
+    obs_space_prey,
+    act_space_prey,
+    model_config: dict,
+) -> tuple[dict, list[str]]:
+    """Create per-population policy specs and configure mapping."""
+    use_population_suffix = (n_predator_pops > 1) or (n_prey_pops > 1)
+
+    def _policy_id(species: str, pop_id: int) -> str:
+        if use_population_suffix:
+            return f"{species}_pop{pop_id}_policy"
+        return f"{species}_policy"
+
+    configure_population_policy_mapping(
+        n_predator_pops=n_predator_pops,
+        n_prey_pops=n_prey_pops,
+        use_population_suffix=use_population_suffix,
+        predator_default=_policy_id("predator", 0),
+        prey_default=_policy_id("prey", 0),
+    )
+
+    policies: dict = {}
+    policies_to_train: list[str] = []
+
+    for pop_id in range(n_predator_pops):
+        strategy = predator_strategies[pop_id] if pop_id < len(predator_strategies) else predator_strategies[-1]
+        pid = _policy_id("predator", pop_id)
+        if strategy in ("ppo", "sac"):
+            policies[pid] = (None, obs_space_pred, act_space_pred, {"model": model_config.copy()})
+            if pid not in policies_to_train:
+                policies_to_train.append(pid)
+        else:
+            policies[pid] = (RandomPolicy, obs_space_pred, act_space_pred, {})
+
+    for pop_id in range(n_prey_pops):
+        strategy = prey_strategies[pop_id] if pop_id < len(prey_strategies) else prey_strategies[-1]
+        pid = _policy_id("prey", pop_id)
+        if strategy in ("ppo", "sac"):
+            policies[pid] = (None, obs_space_prey, act_space_prey, {"model": model_config.copy()})
+            if pid not in policies_to_train:
+                policies_to_train.append(pid)
+        else:
+            policies[pid] = (RandomPolicy, obs_space_prey, act_space_prey, {})
+
+    return policies, policies_to_train
 
 
 def main():
@@ -206,7 +351,7 @@ def main():
     parser.add_argument(
         "--max-env-steps",
         type=int,
-        default=400,
+        default=500,
         help="Cap environment max_steps to avoid runaway episodes (<=0 disables the cap).",
     )
     parser.add_argument(
@@ -276,6 +421,23 @@ def main():
         help="Number of SGD passes over each train batch (lower to curb gradient blowups).",
     )
     parser.add_argument(
+        "--use-lstm",
+        action="store_true",
+        help="Enable LSTM wrapper for policies (shared config for predator/prey).",
+    )
+    parser.add_argument(
+        "--lstm-cell-size",
+        type=int,
+        default=256,
+        help="LSTM hidden size when --use-lstm is enabled.",
+    )
+    parser.add_argument(
+        "--lstm-seq-len",
+        type=int,
+        default=32,
+        help="max_seq_len for LSTM when --use-lstm is enabled.",
+    )
+    parser.add_argument(
         "--grad-clip",
         type=float,
         default=1.0,
@@ -307,16 +469,28 @@ def main():
     parser.add_argument(
         "--predator-strategy",
         type=str,
-        choices=["ppo", "random"],
+        choices=["ppo", "random", "sac"],
         default="ppo",
         help="Learning strategy for predator policy.",
     )
     parser.add_argument(
+        "--predator-strategies",
+        type=str,
+        default=None,
+        help="Optional comma-separated per-population strategies for predators (overrides --predator-strategy).",
+    )
+    parser.add_argument(
         "--prey-strategy",
         type=str,
-        choices=["ppo", "random"],
+        choices=["ppo", "random", "sac"],
         default="ppo",
         help="Learning strategy for prey policy.",
+    )
+    parser.add_argument(
+        "--prey-strategies",
+        type=str,
+        default=None,
+        help="Optional comma-separated per-population strategies for prey (overrides --prey-strategy).",
     )
     
     args = parser.parse_args()
@@ -483,9 +657,24 @@ def main():
         print(f"Sample environment debug log file: {sample_env_log_path}")
     if hasattr(sample_env, "close"):
         sample_env.close()
-    
+
     # 创建模型配置
     model_config = create_model_config()
+    if args.use_lstm:
+        model_config.update(
+            {
+                "use_lstm": True,
+                "max_seq_len": args.lstm_seq_len,
+                "lstm_cell_size": args.lstm_cell_size,
+                "lstm_use_prev_action": False,
+                "lstm_use_prev_reward": False,
+            }
+        )
+        logger.info(
+            "LSTM enabled for policies | cell_size=%s | max_seq_len=%s",
+            args.lstm_cell_size,
+            args.lstm_seq_len,
+        )
     
     # 配置PPO
     total_envs = max(1, args.num_workers * args.num_envs_per_worker)
@@ -556,41 +745,44 @@ def main():
 
     if lr_schedule:
         training_kwargs["lr_schedule"] = lr_schedule
-    predator_policy_spec = (
-        (
-            None,
-            obs_space_pred,
-            act_space_pred,
-            {"model": model_config.copy()},
-        )
-        if args.predator_strategy == "ppo"
-        else (
-            RandomPolicy,
-            obs_space_pred,
-            act_space_pred,
-            {},
-        )
+
+    n_populations = getattr(sample_env, "n_populations", base_env_config.get("n_populations", 1))
+
+    def _parse_strategy_list(raw: str | None, fallback: str, n: int) -> list[str]:
+        allowed = ("ppo", "random", "sac")
+        if not raw:
+            return [fallback] * n
+        values = [v.strip().lower() for v in raw.split(",") if v.strip()]
+        if not values:
+            return [fallback] * n
+        if any(v not in allowed for v in values):
+            invalid = [v for v in values if v not in allowed]
+            raise ValueError(f"Invalid strategy in list: {invalid}; allowed: {allowed}")
+        if len(values) < n:
+            values.extend([values[-1]] * (n - len(values)))
+        return values[:n]
+
+    predator_strategies = _parse_strategy_list(args.predator_strategies, args.predator_strategy, n_populations)
+    prey_strategies = _parse_strategy_list(args.prey_strategies, args.prey_strategy, n_populations)
+
+    strategies_all = predator_strategies + prey_strategies
+    has_ppo = any(s == "ppo" for s in strategies_all)
+    has_sac = any(s == "sac" for s in strategies_all)
+    if has_ppo and has_sac:
+        raise ValueError("Mixing PPO and SAC in a single trainer is not supported; choose one family plus optional random.")
+    algo_kind = "sac" if has_sac else "ppo"
+
+    policies, policies_to_train = build_population_policies(
+        n_predator_pops=n_populations,
+        n_prey_pops=n_populations,
+        predator_strategies=predator_strategies,
+        prey_strategies=prey_strategies,
+        obs_space_pred=obs_space_pred,
+        act_space_pred=act_space_pred,
+        obs_space_prey=obs_space_prey,
+        act_space_prey=act_space_prey,
+        model_config=model_config,
     )
-    prey_policy_spec = (
-        (
-            None,
-            obs_space_prey,
-            act_space_prey,
-            {"model": model_config.copy()},
-        )
-        if args.prey_strategy == "ppo"
-        else (
-            RandomPolicy,
-            obs_space_prey,
-            act_space_prey,
-            {},
-        )
-    )
-    policies_to_train = []
-    if args.predator_strategy == "ppo":
-        policies_to_train.append("predator_policy")
-    if args.prey_strategy == "ppo":
-        policies_to_train.append("prey_policy")
 
     random_only_mode = len(policies_to_train) == 0
     tuner = None
@@ -630,38 +822,78 @@ def main():
         )
         trainable_cls = RandomBaselineTrainable
     else:
-        ppo_config = (
-            PPOConfig()
-            .api_stack(
-                enable_rl_module_and_learner=False,
-                enable_env_runner_and_connector_v2=False,
+        if algo_kind == "ppo":
+            algo_config = (
+                PPOConfig()
+                .api_stack(
+                    enable_rl_module_and_learner=False,
+                    enable_env_runner_and_connector_v2=False,
+                )
+                .environment(env=env_name, env_config=base_env_config)
+                .framework("torch")
+                .multi_agent(
+                    policies=policies,
+                    policy_mapping_fn=policy_mapping_fn,
+                    policies_to_train=policies_to_train,
+                )
+                .training(**training_kwargs)
+                .learners(num_learners=1)
+                .env_runners(
+                    num_env_runners=args.num_workers,
+                    num_envs_per_env_runner=args.num_envs_per_worker,
+                    num_cpus_per_env_runner=3,
+                    rollout_fragment_length=rollout_fragment_length,
+                    batch_mode="complete_episodes",
+                    sample_timeout_s=600,
+                )
+                .resources(
+                    num_cpus_for_main_process=4,
+                    num_gpus=0,
+                )
+                .callbacks(EpisodeMetricsCallbacks)
             )
-            .environment(env=env_name, env_config=base_env_config)
-            .framework("torch")
-            .multi_agent(
-                policies={
-                    "predator_policy": predator_policy_spec,
-                    "prey_policy": prey_policy_spec,
-                },
-                policy_mapping_fn=policy_mapping_fn,
-                policies_to_train=policies_to_train,
+        else:
+            algo_config = (
+                SACConfig()
+                .api_stack(
+                    enable_rl_module_and_learner=False,
+                    enable_env_runner_and_connector_v2=False,
+                )
+                .environment(env=env_name, env_config=base_env_config)
+                .framework("torch")
+                .multi_agent(
+                    policies=policies,
+                    policy_mapping_fn=policy_mapping_fn,
+                    policies_to_train=policies_to_train,
+                )
+                .training(
+                    train_batch_size=args.train_batch_size,
+                    gamma=0.99,
+                    lr=0.0003,
+                    replay_buffer_config={
+                        "type": "MultiAgentPrioritizedReplayBuffer",
+                        "capacity": int(1e5),
+                        "prioritized_replay_alpha": 0.6,
+                        "prioritized_replay_beta": 0.4,
+                        "prioritized_replay_eps": 1e-6,
+                    },
+                    num_steps_sampled_before_learning_starts=1000,
+                )
+                .learners(num_learners=1)
+                .env_runners(
+                    num_env_runners=args.num_workers,
+                    num_envs_per_env_runner=args.num_envs_per_worker,
+                    num_cpus_per_env_runner=3,
+                    rollout_fragment_length=rollout_fragment_length,
+                    batch_mode="complete_episodes",
+                    sample_timeout_s=600,
+                )
+                .resources(
+                    num_cpus_for_main_process=4,
+                    num_gpus=0,
+                )
+                .callbacks(EpisodeMetricsCallbacks)
             )
-            .training(**training_kwargs)
-            .learners(num_learners=1)
-            .env_runners(
-                num_env_runners=args.num_workers,
-                num_envs_per_env_runner=args.num_envs_per_worker,
-                num_cpus_per_env_runner=3,
-                rollout_fragment_length=rollout_fragment_length,
-                batch_mode="complete_episodes",
-                sample_timeout_s=600,
-            )
-            .resources(
-                num_cpus_for_main_process=4,
-                num_gpus=0,
-            )
-            .callbacks(EpisodeMetricsCallbacks)
-        )
 
         if args.eval_interval > 0 and args.eval_episodes > 0:
             eval_env_config = base_env_config.copy()
@@ -676,7 +908,7 @@ def main():
                 "enable_rl_module_and_learner": False,
                 "batch_mode": "complete_episodes",
             }
-            ppo_config = ppo_config.evaluation(
+            algo_config = algo_config.evaluation(
                 evaluation_interval=args.eval_interval,
                 evaluation_duration=args.eval_episodes,
                 evaluation_duration_unit="episodes",
@@ -715,8 +947,8 @@ def main():
 
         checkpoint_num_to_keep = None if args.keep_all_checkpoints else 5
         tuner = Tuner(
-            ppo_config.algo_class,
-            param_space=ppo_config,
+            algo_config.algo_class,
+            param_space=algo_config,
             run_config=RunConfig(
                 storage_path=str(ray_results_dir.resolve()),
                 name="PPO_PredPreyGrass_continuous_simple",
@@ -728,7 +960,7 @@ def main():
                 ),
             ),
         )
-        trainable_cls = ppo_config.algo_class
+        trainable_cls = algo_config.algo_class
 
     # 运行训练
     try:

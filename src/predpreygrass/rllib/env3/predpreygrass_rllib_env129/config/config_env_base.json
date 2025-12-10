@@ -2,7 +2,7 @@
   "enable_continuous_space": true,
   "world_width": 500,
   "world_height": 500,
-  "agent_radius": 6,
+  "agent_radius": 4,
   "reward_predator_catch_prey": 4,
   "reward_prey_eat_grass": 0.8,
   "reward_predator_step": -0.0015,
@@ -13,16 +13,16 @@
   "survival_bonus_predator": 0.3,
   "survival_bonus_prey": 0.0,
   "allow_empty_predator_population": false,
-  "n_initial_active_predator": 4,
-  "n_initial_active_prey": 20,
+  "n_initial_active_predator": 10,
+  "n_initial_active_prey": 40,
   "n_possible_predators": 20000,
   "n_possible_prey": 20000,
-  "n_populations": 1,
-  "population_display_info": {
-    "predator_0": "Immortal",
-    "prey_4": "Random"
+  "population_plan": {
+    "predator": ["random1", "random2", "random3", "random4", "random5"],
+    "prey":     ["random1", "random2", "random3", "random4", "random5"]
   },
-  "initial_num_grass": 100,
+  "population_display_info": {},
+  "initial_num_grass": 200,
   "initial_energy_grass": 1,
   "energy_gain_per_step_grass": 0.01,
   "grass_energy_decay_constant": 0.0,
@@ -106,7 +106,7 @@
   "enable_agent_collision": false,
   "collision_damage": 0.3,
   "wall_collision_damage": 0.5,
-  "max_steps": 20000,
+  "max_steps": 500,
   "verbose_spawning": false,
   "verbose_engagement":false,
   "verbose_movement": false

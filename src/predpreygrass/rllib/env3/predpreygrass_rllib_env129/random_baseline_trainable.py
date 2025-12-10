@@ -35,6 +35,7 @@ class RandomBaselineTrainable(tune.Trainable):
             terminations = {"__all__": False}
             truncations = {"__all__": False}
             rewards_acc = defaultdict(float)
+            steps_acc = defaultdict(int)  # 按策略统计累计步数（对齐 RLlib policy_reward_mean 定义）
             steps = 0
 
             while not (terminations.get("__all__", False) or truncations.get("__all__", False)):
@@ -43,16 +44,27 @@ class RandomBaselineTrainable(tune.Trainable):
                 for agent_id, reward in rewards.items():
                     team = "predator" if agent_id.startswith("predator") else "prey"
                     rewards_acc[team] += reward
+                    steps_acc[team] += 1
                 steps += 1
 
             rewards_acc["steps"] = steps
+            rewards_acc["pred_steps"] = steps_acc.get("predator", 0)
+            rewards_acc["prey_steps"] = steps_acc.get("prey", 0)
             total_env_steps += steps
             episode_stats.append(rewards_acc)
 
-        mean_pred = sum(r.get("predator", 0.0) for r in episode_stats) / len(episode_stats)
-        mean_prey = sum(r.get("prey", 0.0) for r in episode_stats) / len(episode_stats)
+        # 对齐 RLlib：policy_reward_mean = 总 reward / 总 agent_steps（同一策略）
+        total_pred_reward = sum(r.get("predator", 0.0) for r in episode_stats)
+        total_prey_reward = sum(r.get("prey", 0.0) for r in episode_stats)
+        total_pred_steps = sum(r.get("pred_steps", 0) for r in episode_stats)
+        total_prey_steps = sum(r.get("prey_steps", 0) for r in episode_stats)
+
+        mean_pred = total_pred_reward / max(total_pred_steps, 1)
+        mean_prey = total_prey_reward / max(total_prey_steps, 1)
+
         mean_steps = sum(r.get("steps", 0.0) for r in episode_stats) / len(episode_stats)
 
+        # 合成一个对称的 episode_reward_mean 供对比（简单平均两策略的 policy 平均回报）
         combined_reward = 0.5 * (mean_pred + mean_prey)
         return {
             "episode_reward_mean": combined_reward,

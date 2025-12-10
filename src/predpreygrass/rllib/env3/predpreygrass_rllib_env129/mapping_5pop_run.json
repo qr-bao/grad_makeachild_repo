@@ -1,0 +1,12 @@
+{
+  "predator_0": "ppo",
+  "predator_1": "sac",
+  "predator_2": "td3",
+  "predator_3": "a2c",
+  "predator_4": "random",
+  "prey_0": "ppo",
+  "prey_1": "sac",
+  "prey_2": "td3",
+  "prey_3": "a2c",
+  "prey_4": "random"
+}

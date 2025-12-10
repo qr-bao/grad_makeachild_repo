@@ -65,6 +65,8 @@ def load_env_config(path: Path | None) -> dict:
 def main() -> None:
     args = build_parser().parse_args()
     env_config = load_env_config(args.env_config_file)
+    # 确保环境本身的 max_steps 也同步到命令行设置，避免 500 步自动截断
+    env_config["max_steps"] = args.max_steps
 
     env = PredPreyGrass(env_config)
     observations, _ = env.reset(seed=args.seed)
