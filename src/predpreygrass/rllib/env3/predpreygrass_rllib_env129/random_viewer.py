@@ -9,8 +9,19 @@ from typing import Dict
 
 import numpy as np
 
+# Allow running this file directly without installing the package by ensuring the
+# repository `src/` root is on sys.path.
+import sys
+
+_SRC_ROOT = Path(__file__).resolve().parents[4]
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
+
 from predpreygrass.rllib.env3.predpreygrass_rllib_env129.predpreygrass_rllib_env import (
     PredPreyGrass,
+)
+from predpreygrass.rllib.env3.predpreygrass_rllib_env129.config.config_env_base import (
+    config_env_base,
 )
 from predpreygrass.rllib.env3.predpreygrass_rllib_env129.prey_test_config import (
     prey_test_config,
@@ -27,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Optional JSON file overriding environment config.",
+    )
+    parser.add_argument(
+        "--base-config",
+        choices=("env_base", "prey_test"),
+        default="env_base",
+        help="Which built-in config to start from before applying --env-config-file overrides.",
     )
     parser.add_argument(
         "--max-steps",
@@ -49,10 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_env_config(path: Path | None) -> dict:
-    config = dict(prey_test_config)
+def load_env_config(path: Path | None, *, base: str) -> dict:
+    config = dict(config_env_base if base == "env_base" else prey_test_config)
     if path is not None:
         cfg_path = path.expanduser().resolve()
+        if cfg_path.is_dir():
+            cfg_path = cfg_path / "best_cfg.json"
         if not cfg_path.is_file():
             raise FileNotFoundError(f"Env config file not found: {cfg_path}")
         with cfg_path.open("r", encoding="utf-8") as fp:
@@ -64,7 +83,7 @@ def load_env_config(path: Path | None) -> dict:
 
 def main() -> None:
     args = build_parser().parse_args()
-    env_config = load_env_config(args.env_config_file)
+    env_config = load_env_config(args.env_config_file, base=args.base_config)
     # 确保环境本身的 max_steps 也同步到命令行设置，避免 500 步自动截断
     env_config["max_steps"] = args.max_steps
 

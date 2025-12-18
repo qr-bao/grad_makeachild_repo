@@ -537,6 +537,10 @@ class PredPreyGrass(MultiAgentEnv):
                     self.population_display_info[pop_key] = label
         # === 新增：草的局部密度系统 ===
         self.grass_perception_radius = config.get("grass_perception_radius", 100.0)
+        # Grass visual/physical radius is derived from `agent_radius` by default.
+        # Exposed as a config knob so experiments can change the food footprint
+        # without changing agent size.
+        self.grass_radius_scale = float(config.get("grass_radius_scale", 0.6))
         self.grass_density_reference = config.get("grass_density_reference", 8.0)
         self.grass_spawn_max_attempts = config.get("grass_spawn_max_attempts", 20)
         
@@ -579,14 +583,21 @@ class PredPreyGrass(MultiAgentEnv):
         self.enable_paired_reproduction = config.get("enable_paired_reproduction", False)
         self.mating_distance = config.get("mating_distance", 100.0)
         self.min_reproduction_health = config.get("min_reproduction_health", 70.0)
+        self.population_mutation_prob = {
+            "predator": float(np.clip(config.get("population_mutation_prob_predator", 0.0), 0.0, 1.0)),
+            "prey": float(np.clip(config.get("population_mutation_prob_prey", 0.0), 0.0, 1.0)),
+        }
 
         # === 繁殖参数（按物种区分） ===
         default_repro_config = {
-            "mode": config.get("reproduction_mode", "fixed_ratio"),
+            # Default to the energy-conserving mode. The legacy "fixed_ratio" mode
+            # can inject energy via `offspring_min_energy` if not configured
+            # carefully.
+            "mode": config.get("reproduction_mode", "ratio"),
             "energy_ratio": config.get("reproduction_energy_ratio", 1 / 3),
             "fixed_cost": config.get("reproduction_fixed_cost", 10.0),
             "transfer_ratio": config.get("reproduction_transfer_ratio", 0.3),
-            "offspring_min_energy": config.get("offspring_min_energy", 60.0),
+            "offspring_min_energy": config.get("offspring_min_energy", 0.0),
             "min_age": config.get("min_reproduction_age", 50),
             "max_age": config.get("max_reproduction_age", 800),
             "cooldown": config.get("reproduction_cooldown", 100),
@@ -2508,7 +2519,9 @@ class PredPreyGrass(MultiAgentEnv):
         observation = np.zeros((self.num_obs_channels, observation_range, observation_range), dtype=np.float32)
         observation[0].fill(1)
         observation[0, xolo:xohi, yolo:yohi] = 0
-        observation[1:, xolo:xohi, yolo:yhi] = self.grid_world_state[1:, xlo:xhi, ylo:yhi].astype(np.float32, copy=False)
+        observation[1:, xolo:xohi, yolo:yohi] = self.grid_world_state[1:, xlo:xhi, ylo:yhi].astype(
+            np.float32, copy=False
+        )
         
         return observation
 
@@ -3193,6 +3206,9 @@ class PredPreyGrass(MultiAgentEnv):
         
         # 初始化属性
         pop_id = self.agent_population_id[parent1]
+        mutation_prob = self.population_mutation_prob.get(agent_type, 0.0)
+        if mutation_prob > 0.0 and self.rng.random() < mutation_prob:
+            pop_id = int(self.rng.integers(0, self.n_populations))
         self.agent_population_id[offspring] = pop_id
         self.agent_last_reproduction_step[offspring] = -1000
         self.agent_generation[offspring] = max(
@@ -3314,7 +3330,7 @@ class PredPreyGrass(MultiAgentEnv):
         if self.enable_continuous_space and self.space is not None:
             body = pymunk.Body(body_type=pymunk.Body.STATIC)
             body.position = self.grass_positions[grass_id]
-            grass_radius = self.agent_radius * 0.6
+            grass_radius = self.agent_radius * self.grass_radius_scale
             shape = pymunk.Circle(body, grass_radius)
             shape.collision_type = self.COLLISION_TYPE_GRASS
             shape.sensor = True
@@ -3333,7 +3349,7 @@ class PredPreyGrass(MultiAgentEnv):
     ) -> Tuple[float, float] | None:
         """根据参考位置挑选可行的草生成位置。"""
         if self.enable_continuous_space:
-            grass_radius = self.agent_radius * 0.6
+            grass_radius = self.agent_radius * self.grass_radius_scale
             min_spacing = max(self.agent_radius * 2, grass_radius * 2)
             max_distance = max(min_spacing, self.grass_perception_radius)
             attempts = 0
@@ -3889,7 +3905,7 @@ class PredPreyGrass(MultiAgentEnv):
         if self.enable_continuous_space and self.space is not None:
             body = pymunk.Body(body_type=pymunk.Body.STATIC)
             body.position = position
-            grass_radius = self.agent_radius * 0.6
+            grass_radius = self.agent_radius * self.grass_radius_scale
             shape = pymunk.Circle(body, grass_radius)
             shape.collision_type = self.COLLISION_TYPE_GRASS
             shape.sensor = True

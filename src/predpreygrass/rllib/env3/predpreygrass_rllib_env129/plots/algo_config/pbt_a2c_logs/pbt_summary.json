@@ -1,0 +1,42 @@
+{
+  "best_predator_key": "a2c_predator_1",
+  "best_prey_key": "a2c_prey_2",
+  "best_predator_hparams": {
+    "lr": 0.00044392034912876165,
+    "gamma": 0.99,
+    "entropy_coef": 0.0007926984553835711,
+    "value_coef": 0.5334524889816511,
+    "updates_per_episode": 5
+  },
+  "best_prey_hparams": {
+    "lr": 0.00014276761731564603,
+    "gamma": 0.99,
+    "entropy_coef": 0.023243610523820266,
+    "value_coef": 0.4799510304036102,
+    "updates_per_episode": 5
+  },
+  "final_scores": {
+    "a2c_predator_0": 0.4035749999999994,
+    "a2c_predator_1": 0.4614416666666659,
+    "a2c_predator_2": 0.33025833333333254,
+    "a2c_predator_3": 0.3031166666666657,
+    "a2c_predator_4": 0.2672666666666661,
+    "a2c_prey_0": 0.13275260295260255,
+    "a2c_prey_1": 0.12136484848484815,
+    "a2c_prey_2": 0.45932478632478596,
+    "a2c_prey_3": 0.2835947008547005,
+    "a2c_prey_4": 0.35260444444444405
+  },
+  "best_score_seen": {
+    "a2c_predator_0": 2.3834444444444314,
+    "a2c_predator_1": 2.7605833333333187,
+    "a2c_predator_2": 2.088714285714278,
+    "a2c_predator_3": 2.242499999999997,
+    "a2c_predator_4": 3.0521785714285676,
+    "a2c_prey_0": 0.6609999999999989,
+    "a2c_prey_1": 0.9272727272727269,
+    "a2c_prey_2": 1.0369999999999995,
+    "a2c_prey_3": 0.7229999999999995,
+    "a2c_prey_4": 0.8135999999999995
+  }
+}

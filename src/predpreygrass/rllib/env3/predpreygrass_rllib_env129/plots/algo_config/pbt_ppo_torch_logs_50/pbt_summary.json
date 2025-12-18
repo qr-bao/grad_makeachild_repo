@@ -1,0 +1,50 @@
+{
+  "best_predator_key": "ppo_predator_1",
+  "best_prey_key": "ppo_prey_3",
+  "best_predator_hparams": {
+    "lr": 9.305226843550351e-05,
+    "clip_param": 0.12186922958826092,
+    "entropy_coef": 0.005639202015836427,
+    "value_coef": 0.4051272222969253,
+    "gamma": 0.99,
+    "lambda_": 0.95,
+    "num_epochs": 4,
+    "minibatch_size": 2048,
+    "max_grad_norm": 0.5
+  },
+  "best_prey_hparams": {
+    "lr": 0.0002206189129355842,
+    "clip_param": 0.15117363630512734,
+    "entropy_coef": 0.008079897112877479,
+    "value_coef": 0.8386916878162675,
+    "gamma": 0.99,
+    "lambda_": 0.95,
+    "num_epochs": 4,
+    "minibatch_size": 2048,
+    "max_grad_norm": 0.5
+  },
+  "final_scores": {
+    "ppo_predator_0": 0.925182144522138,
+    "ppo_predator_1": 0.9580072619047568,
+    "ppo_predator_2": 0.7664798611111054,
+    "ppo_predator_3": 0.3532140842490813,
+    "ppo_predator_4": 0.7550999999999913,
+    "ppo_prey_0": -0.44510045892385436,
+    "ppo_prey_1": -0.31210672494822866,
+    "ppo_prey_2": -0.3539988014934529,
+    "ppo_prey_3": -0.2196687079889462,
+    "ppo_prey_4": -0.4593503102382597
+  },
+  "best_score_seen": {
+    "ppo_predator_0": 3.1335227272727137,
+    "ppo_predator_1": 2.520649999999983,
+    "ppo_predator_2": 2.317444444444428,
+    "ppo_predator_3": 2.975785714285705,
+    "ppo_predator_4": 2.7475833333333184,
+    "ppo_prey_0": 0.3468235294117632,
+    "ppo_prey_1": 0.7039999999999986,
+    "ppo_prey_2": 0.02499999999999908,
+    "ppo_prey_3": -0.043111111111112065,
+    "ppo_prey_4": 0.152799999999999
+  }
+}

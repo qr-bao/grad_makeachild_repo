@@ -1,0 +1,10 @@
+{
+  "ppo_predator": "/tmp/pbt_ppo_torch_logs_50/checkpoints/ppo_predator_1.pt",
+  "ppo_prey": "/tmp/pbt_ppo_torch_logs_50/checkpoints/ppo_prey_3.pt",
+  "sac_predator": "/tmp/pbt_sac_torch_logs_50/checkpoints/sac_predator_3.pt",
+  "sac_prey": "/tmp/pbt_sac_torch_logs_50/checkpoints/sac_prey_2.pt",
+  "td3_predator": "/tmp/pbt_td3_logs/checkpoints/td3_predator_1.pt",
+  "td3_prey": "/tmp/pbt_td3_logs/checkpoints/td3_prey_2.pt",
+  "a2c_predator": "/tmp/pbt_a2c_logs/checkpoints/a2c_predator_1.pt",
+  "a2c_prey": "/tmp/pbt_a2c_logs/checkpoints/a2c_prey_2.pt"
+}

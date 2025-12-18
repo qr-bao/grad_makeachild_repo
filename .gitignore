@@ -1,0 +1,8 @@
+# Ignore generated training logs for env127
+src/predpreygrass/rllib/env3/predpreygrass_rllib_env127/logs/
+
+# Ignore env-specific generated data folders
+src/predpreygrass/rllib/env3/*/logs/
+src/predpreygrass/rllib/env3/*/simulation_data/
+src/predpreygrass/rllib/env3/*/.history/
+src/predpreygrass/rllib/env3/*/run_results/
